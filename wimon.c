@@ -6,7 +6,7 @@
  * $ gcc -o wimon wimon.c -ggdb -Wall -lsqlite3
  * $ sudo iw phy phy0 interface add mon0 type monitor
  * $ sudo ip link set dev mon0 up
- * $ sudo tcpdump -ttnei mon0 -s0 'type mgt and not subtype probe-resp | ./wimon -
+ * $ sudo tcpdump -ttnei mon0 -s0 'type mgt and not subtype probe-resp' | ./wimon -
  *
  * Data is logged to multiple SQLite tables:
  * - nodes (id, mac, created, ping, flags, ssid)
@@ -24,7 +24,7 @@
  * The IEEE MAC address prefix database can be downloaded here:
  * http://standards.ieee.org/develop/regauth/oui/oui.txt
  * It may be imported to the SQLite database like this:
- * $ grep hex oui.txt | cut -b3-11,21- | ./wifi -oui -
+ * $ grep hex oui.txt | cut -b3-11,21- | ./wimon -oui -
  *
  * Example use of OUI database:
  * $ sqlite3 wimon.db \
