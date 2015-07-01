@@ -1347,8 +1347,13 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 	else {
 		sta = alloc_node();
 		memcpy(sta->mac, sa, MAC_LEN);
-		sta->flags |= NFL_NEW;
 		sta->created = sta->ping = tv->tv_sec;
+		if(insert_node(sta) < 0) {
+			fprintf(stderr, "[process_frame] insert_node() failed\n");
+			return -1;
+		}
+
+		sta->flags |= NFL_NEW;
 	}
 
 	/* Update node flags */
@@ -1413,11 +1418,6 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 	if(sta->flags & NFL_NEW) {
 		/* Report newly discovered nodes */
 		sta->flags &= ~NFL_NEW;
-
-		if(insert_node(sta) < 0) {
-			fprintf(stderr, "[process_frame] insert_node() failed\n");
-			return -1;
-		}
 
 		sprintf(msg, FMT_PREFIX "New %s discovered doing %s at: %s",
 			mactoa(sta->mac), freq, signal,
