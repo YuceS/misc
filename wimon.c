@@ -134,7 +134,8 @@ typedef struct station {
 
 	/* Sample data */
 	struct timeval tv[MAX_STA_SAMPLES];
-	int dbm[MAX_STA_SAMPLES];
+	unsigned short freq[MAX_STA_SAMPLES];
+	short dbm[MAX_STA_SAMPLES];
 	mgmt_st_t mgmt[MAX_STA_SAMPLES];
 	char ssid[MAX_STA_SAMPLES][SSID_LEN];
 	unsigned char sa[MAX_STA_SAMPLES][MAC_LEN];
@@ -274,8 +275,8 @@ static int create_db_tables(time_t now) {
 
 
 	sprintf(q, "CREATE TABLE IF NOT EXISTS samples (node_id INTEGER,"
-		" created UNSIGNED integer, dbm INTEGER, mgmt INTEGER,"
-		" da TEXT, sa TEXT, ssid TEXT)");
+		" created UNSIGNED integer, freq INTEGER, dbm INTEGER,"
+		" mgmt INTEGER, da TEXT, sa TEXT, ssid TEXT)");
 	if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
 		fprintf(stderr, "SQLite: %s\nSQL: %s\n", sqlite3_errmsg(db), q);
 		return -1;
@@ -298,8 +299,8 @@ static int create_db_tables(time_t now) {
 
 	sprintf(q, "CREATE TABLE IF NOT EXISTS samples_%04d%02d%02d%02d"
 		" (node_id INTEGER,"
-		" created UNSIGNED integer, dbm INTEGER, mgmt INTEGER,"
-		" da TEXT, sa TEXT, ssid TEXT)",
+		" created UNSIGNED integer, freq INTEGER, dbm INTEGER,"
+		" mgmt INTEGER, da TEXT, sa TEXT, ssid TEXT)",
 		tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour);
 	if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
 		fprintf(stderr, "SQLite: %s\nSQL: %s\n", sqlite3_errmsg(db), q);
@@ -728,8 +729,8 @@ static int save_node_samples(sta_t *sta) {
 
 	if(stmt == NULL) {
 		sprintf(q, "INSERT INTO samples"
-			" (node_id,created,mgmt,dbm,sa,da,ssid)"
-			" VALUES(?,?,?,?,?,?,?)");
+			" (node_id,created,mgmt,freq,dbm,sa,da,ssid)"
+			" VALUES(?,?,?,?,?,?,?,?)");
 
 		rc = sqlite3_prepare_v2(db, q, -1, &stmt, NULL);
 		if(rc != SQLITE_OK) {
@@ -751,13 +752,14 @@ static int save_node_samples(sta_t *sta) {
 		sqlite3_bind_int64(stmt, 1, sta->id);
 		sqlite3_bind_int64(stmt, 2, sta->tv[i].tv_sec);
 		sqlite3_bind_int(stmt, 3, sta->mgmt[i]);
-		sqlite3_bind_int(stmt, 4, sta->dbm[i]);
-		sqlite3_bind_text(stmt, 5, mactoa(sta->sa[i]), -1, SQLITE_TRANSIENT);
-		sqlite3_bind_text(stmt, 6, mactoa(sta->da[i]), -1, SQLITE_TRANSIENT);
+		sqlite3_bind_int(stmt, 4, sta->freq[i]);
+		sqlite3_bind_int(stmt, 5, sta->dbm[i]);
+		sqlite3_bind_text(stmt, 6, mactoa(sta->sa[i]), -1, SQLITE_TRANSIENT);
+		sqlite3_bind_text(stmt, 7, mactoa(sta->da[i]), -1, SQLITE_TRANSIENT);
 		if(sta->ssid[i][0] == 0)
-			sqlite3_bind_null(stmt, 7);
+			sqlite3_bind_null(stmt, 8);
 		else
-			sqlite3_bind_text(stmt, 7, sta->ssid[i], -1, SQLITE_STATIC);
+			sqlite3_bind_text(stmt, 8, sta->ssid[i], -1, SQLITE_STATIC);
 		while((rc = sqlite3_step(stmt)) != SQLITE_DONE) {
 			if(rc == SQLITE_BUSY) {
 				usleep(1000);
@@ -777,8 +779,9 @@ static int save_node_samples(sta_t *sta) {
 		i = sta->sample - MIN_STA_SAMPLES;
 		sta->sample = sta->stored_samples = MIN_STA_SAMPLES;
 		memmove(sta->tv, &sta->tv[i], sta->sample * sizeof(sta->tv[0]));
-		memmove(sta->dbm, &sta->dbm[i], sta->sample * sizeof(int));
-		memmove(sta->mgmt, &sta->mgmt[i], sta->sample * sizeof(int));
+		memmove(sta->freq, &sta->freq[i], sta->sample * sizeof(sta->freq[0]));
+		memmove(sta->dbm, &sta->dbm[i], sta->sample * sizeof(sta->dbm[0]));
+		memmove(sta->mgmt, &sta->mgmt[i], sta->sample * sizeof(sta->mgmt[0]));
 		memmove(sta->sa, &sta->sa[i], sta->sample * MAC_LEN);
 		memmove(sta->da, &sta->da[i], sta->sample * MAC_LEN);
 		memmove(sta->ssid, &sta->ssid[i], sta->sample * SSID_LEN);
@@ -837,7 +840,7 @@ static int load_node_samples(sta_t *sta) {
 
 
 	/* Load samples and update sta {} in reverse order */
-	sprintf(q, "SELECT created,mgmt,dbm,sa,da,ssid"
+	sprintf(q, "SELECT created,mgmt,freq,dbm,sa,da,ssid"
 		" FROM samples WHERE node_id=?"
 		" ORDER BY _ROWID_ DESC LIMIT %d", MIN_STA_SAMPLES);
 
@@ -866,20 +869,21 @@ static int load_node_samples(sta_t *sta) {
 		sta->tv[i].tv_sec = (time_t)sqlite3_column_int64(stmt, 0);
 		sta->tv[i].tv_usec = 0;
 		sta->mgmt[i] = sqlite3_column_int(stmt, 1);
-		sta->dbm[i] = sqlite3_column_int(stmt, 2);
-		p = sqlite3_column_text(stmt, 3);
+		sta->freq[i] = sqlite3_column_int(stmt, 2);
+		sta->dbm[i] = sqlite3_column_int(stmt, 3);
+		p = sqlite3_column_text(stmt, 4);
 		for(j = 0; j < 18; j += 3) {
 			sscanf((char *)&p[j], "%02x", &v);
 			sta->sa[i][j / 3] = (unsigned char)v;
 		}
-		p = sqlite3_column_text(stmt, 4);
+		p = sqlite3_column_text(stmt, 5);
 		for(j = 0; j < 18; j += 3) {
 			sscanf((char *)&p[j], "%02x", &v);
 			sta->da[i][j / 3] = (unsigned char)v;
 		}
 
 		sta->ssid[i][0] = 0;
-		if((p = sqlite3_column_text(stmt, 5)) != NULL) {
+		if((p = sqlite3_column_text(stmt, 6)) != NULL) {
 			strncpy(sta->ssid[i], (char *)p, SSID_LEN);
 			sta->ssid[i][SSID_LEN - 1] = 0;
 		}
@@ -1010,8 +1014,9 @@ static void evict_node(sta_t *sta) {
 		sta->sample = last->sample;
 		sta->stored_samples = last->stored_samples;
 		memmove(sta->tv, last->tv, last->sample * sizeof(sta->tv[0]));
-		memmove(sta->dbm, last->dbm, last->sample * sizeof(int));
-		memmove(sta->mgmt, last->mgmt, last->sample * sizeof(int));
+		memmove(sta->freq, last->freq, last->sample * sizeof(sta->freq[0]));
+		memmove(sta->dbm, last->dbm, last->sample * sizeof(sta->dbm[0]));
+		memmove(sta->mgmt, last->mgmt, last->sample * sizeof(sta->mgmt[0]));
 		memmove(sta->sa, last->sa, last->sample * MAC_LEN);
 		memmove(sta->da, last->da, last->sample * MAC_LEN);
 		memmove(sta->ssid, last->ssid, last->sample * SSID_LEN);
@@ -1046,6 +1051,7 @@ static sta_t *alloc_node(void) {
 	sta->sample = 0;
 	sta->stored_samples = 0;
 	memset(sta->tv, 0, sizeof(sta->tv));
+	memset(sta->freq, 0, sizeof(sta->freq));
 	memset(sta->dbm, 0, sizeof(sta->dbm));
 	memset(sta->mgmt, 0, sizeof(sta->mgmt));
 	memset(sta->sa, 0, sizeof(sta->sa));
@@ -1195,8 +1201,8 @@ static int log_node_message(const sta_t *sta, const char *msg) {
 }
 
 static int parse_tcpdump(char *line, unsigned char *bssid, unsigned char *da,
-		unsigned char *sa, int *signal, struct timeval *tv,
-		mgmt_st_t *mgmt_st, char *ssid) {
+		unsigned char *sa, unsigned short *freq, short *signal,
+		struct timeval *tv, mgmt_st_t *mgmt_st, char *ssid) {
 
 	char *p, *ws;
 	size_t i, j, n, v;
@@ -1216,12 +1222,21 @@ static int parse_tcpdump(char *line, unsigned char *bssid, unsigned char *da,
 	tv->tv_sec = sec;
 	tv->tv_usec = (int)usec;
 
+	/* locate frequency */
+	while(i < n) {
+		char junk[2];
+		for(p = &line[i]; i < n && line[i] && line[i] != ' '; i++, p++);
+		if(i < n) i++, p++;
+		if(sscanf(p, "%04hu %1[M]%1[H]%1[z]", freq, junk, junk, junk) == 4)
+			break;
+	}
+
 	/* locate signal strength */
 	while(i < n) {
 		char junk[2];
 		for(p = ws = &line[i]; i < n && line[i] && line[i] != ' '; i++, ws++);
 		*ws = 0; if(i < n) i++;
-	   	if(sscanf(p, "%d%1[d]%1[B]", signal, junk, junk) == 3)
+		if(sscanf(p, "%hd%1[d]%1[B]", signal, junk, junk) == 3)
 			break;
 	}
 
@@ -1310,11 +1325,11 @@ static int parse_tcpdump(char *line, unsigned char *bssid, unsigned char *da,
 	return 0;
 }
 
-#define FMT_PREFIX "%-18s %-3ddBm [%-7s] '%-18.18s'  "
+#define FMT_PREFIX "%-17s %04huMHz %-3ddBm [%-7s] '%-18.18s'  "
 static int process_frame(const unsigned char *bssid, const unsigned char *da,
-			const unsigned char *sa, int signal,
-			const struct timeval *tv, mgmt_st_t mgmt_st,
-			const char *ssid) {
+			const unsigned char *sa, const unsigned short freq,
+			const short signal, const struct timeval *tv,
+			mgmt_st_t mgmt_st, const char *ssid) {
 	char msg[1024];
 	int i;
 	time_t t;
@@ -1386,6 +1401,7 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 
 	i = sta->sample++;
 	memcpy(&sta->tv[i], tv, sizeof(struct timeval));
+	sta->freq[i] = freq;
 	sta->dbm[i] = signal;
 	sta->mgmt[i] = mgmt_st;
 	memcpy(sta->sa[i], sa, MAC_LEN);
@@ -1404,7 +1420,8 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 		}
 
 		sprintf(msg, FMT_PREFIX "New %s discovered doing %s at: %s",
-			mactoa(sta->mac), signal, nfltoa(sta->flags), ssid,
+			mactoa(sta->mac), freq, signal,
+			nfltoa(sta->flags), ssid,
 			sta->flags & NFL_AP? "AP": "station",
 			mgmttoa(mgmt_st), ctime(&sta->created));
 		msg[strlen(msg) - 1] = 0;
@@ -1416,7 +1433,8 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 
 		t = tv->tv_sec - sta->ping;
 		sprintf(msg, FMT_PREFIX "%s re-appeared doing %s after"
-			" being gone for %ldh%02ldm: %s", mactoa(sta->mac), signal,
+			" being gone for %ldh%02ldm: %s",
+			mactoa(sta->mac), freq, signal,
 			nfltoa(sta->flags), ssid,
 			sta->flags & NFL_AP? "AP": "Station", mgmttoa(mgmt_st),
 			t / 3600, (t % 3600) / 60, ctime(&tv->tv_sec));
@@ -1429,8 +1447,9 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 	if(mgmt_st == MGMT_ASSOC_REQ || mgmt_st == MGMT_REASSOC_REQ
 		|| mgmt_st == MGMT_AUTH) {
 		sprintf(msg, FMT_PREFIX "Station attempting %s with AP %s at: %s",
-			mactoa(sta->mac), signal, nfltoa(sta->flags), ssid,
-			mgmttoa(mgmt_st), mactoa(da), ctime(&tv->tv_sec));
+			mactoa(sta->mac), signal, freq,
+			nfltoa(sta->flags), ssid, mgmttoa(mgmt_st), mactoa(da),
+			ctime(&tv->tv_sec));
 		msg[strlen(msg) - 1] = 0;
 		log_node_message(sta, msg);
 
@@ -1441,16 +1460,17 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 	else if(mgmt_st == MGMT_ASSOC_RSP || mgmt_st == MGMT_REASSOC_RSP
 		|| mgmt_st == MGMT_PROBE_RSP || mgmt_st == MGMT_DEAUTH) {
 		sprintf(msg, FMT_PREFIX "AP sent %s to station %s at: %s",
-			mactoa(sta->mac), signal, nfltoa(sta->flags),
-			sta->current_ssid, mgmttoa(mgmt_st), mactoa(da),
-			ctime(&tv->tv_sec));
+			mactoa(sta->mac), freq, signal,
+			nfltoa(sta->flags), sta->current_ssid,
+			mgmttoa(mgmt_st), mactoa(da), ctime(&tv->tv_sec));
 		msg[strlen(msg) - 1] = 0;
 		log_node_message(sta, msg);
 	}
 	else if(mgmt_st == MGMT_DISASSOC) {
 		sprintf(msg, FMT_PREFIX "%s disassociated with %s %s at: %s",
-			mactoa(sta->mac), signal, nfltoa(sta->flags),
-			sta->current_ssid, sta->flags & NFL_AP? "AP": "Station",
+			mactoa(sta->mac), freq, signal,
+			nfltoa(sta->flags), sta->current_ssid,
+			sta->flags & NFL_AP? "AP": "Station",
 			sta->flags & NFL_AP? "station": "AP", mactoa(da),
 			ctime(&tv->tv_sec));
 		msg[strlen(msg) - 1] = 0;
@@ -1460,8 +1480,9 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 	}
 	else if(mgmt_st == MGMT_PROBE_REQ && strlen(ssid)) {
 		sprintf(msg, FMT_PREFIX "%s probing for SSID '%s' at: %s",
-			mactoa(sta->mac), signal, nfltoa(sta->flags),
-			sta->current_ssid, sta->flags & NFL_AP? "AP": "Station",
+			mactoa(sta->mac), freq, signal,
+			nfltoa(sta->flags), sta->current_ssid,
+			sta->flags & NFL_AP? "AP": "Station",
 			ssid, ctime(&tv->tv_sec));
 		log_node_message(sta, msg);
 	}
@@ -1469,9 +1490,9 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 	/* Report changes in SSID probes */
 	if(i && strcmp(sta->ssid[i - 1], ssid) && sta->ssid[i - 1][0] && ssid[0]) {
 		sprintf(msg, FMT_PREFIX "Station previously sent %s for other SSID: %s",
-			mactoa(sta->mac), signal, nfltoa(sta->flags),
-			sta->current_ssid, mgmttoa(sta->mgmt[i - 1]),
-			sta->ssid[i - 1]);
+			mactoa(sta->mac), freq, signal,
+			nfltoa(sta->flags), sta->current_ssid,
+			mgmttoa(sta->mgmt[i - 1]), sta->ssid[i - 1]);
 		log_node_message(sta, msg);
 	}
 
@@ -1490,8 +1511,9 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 	 */
 	if(i && (signal > (sta->dbm[i - 1] + 12) || signal < (sta->dbm[i - 1] - 12))) {
 		sprintf(msg, FMT_PREFIX "Signal changed %ddBm from previous value: %-3ddBm",
-			mactoa(sta->mac), signal, nfltoa(sta->flags), ssid,
-			signal - sta->dbm[i - 1], sta->dbm[i - 1]);
+			mactoa(sta->mac), freq, signal,
+			nfltoa(sta->flags), ssid, signal - sta->dbm[i - 1],
+			sta->dbm[i - 1]);
 		log_node_message(sta, msg);
 	}
 
@@ -1534,8 +1556,9 @@ static int update(time_t now) {
 
 		t = now - sta->ping;
 		sprintf(msg, FMT_PREFIX "%s disappeared after %ldh%02ldm, last seen at: %s",
-			mactoa(sta->mac), sta->dbm[sta->sample - 1], nfltoa(sta->flags),
-			sta->ssid[sta->sample - 1],
+			mactoa(sta->mac), sta->freq[sta->sample - 1],
+			sta->dbm[sta->sample - 1],
+			nfltoa(sta->flags), sta->ssid[sta->sample - 1],
 			sta->flags & NFL_AP? "AP": "Station",
 			t / 3600, (t % 3600) / 60, ctime(&sta->ping));
 		msg[strlen(msg) - 1] = 0;
@@ -1575,7 +1598,8 @@ static void do_report(void) {
 	for(i = 0; i < num_nodes; i++) {
 		sta = &nodes[i];
 		printf(FMT_PREFIX "logged %d samples, last seen: %s",
-			mactoa(sta->mac), sta->dbm[sta->sample - 1],
+			mactoa(sta->mac), sta->freq[sta->sample - 1],
+			sta->dbm[sta->sample - 1],
 			nfltoa(sta->flags), sta->current_ssid,
 			sta->sample, ctime(&sta->ping));
 	}
@@ -1645,7 +1669,9 @@ static int oui_import(FILE *fd) {
 int main(int c, char **v) {
 	char buf[512], ssid[SSID_LEN];
 	unsigned char bssid[MAC_LEN], da[MAC_LEN], sa[MAC_LEN];
-	int dbm, n;
+	unsigned short freq;
+	short dbm;
+	int n;
 	struct timeval tv;
 	mgmt_st_t mgmt_st;
 	time_t now, prev_report, prev_update;
@@ -1727,7 +1753,7 @@ int main(int c, char **v) {
 		/* Parse tcpdump output */
 		temp = strdup(buf);
 		if((n = parse_tcpdump(buf,
-			bssid, da, sa, &dbm, &tv, &mgmt_st, ssid)) < 0) {
+			bssid, da, sa, &freq, &dbm, &tv, &mgmt_st, ssid)) < 0) {
 
 			fprintf(stderr, "[main] parse_tcpdump() failed: %d\n"
 				"tcpdump data: %s", n, temp);
@@ -1737,7 +1763,7 @@ int main(int c, char **v) {
 
 		free(temp);
 
-		if(process_frame(bssid, da, sa, dbm, &tv, mgmt_st, ssid)) {
+		if(process_frame(bssid, da, sa, freq, dbm, &tv, mgmt_st, ssid)) {
 			fprintf(stderr, "[main] process_frame() failed\n");
 			break;
 		}
