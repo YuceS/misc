@@ -1447,7 +1447,7 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 	if(mgmt_st == MGMT_ASSOC_REQ || mgmt_st == MGMT_REASSOC_REQ
 		|| mgmt_st == MGMT_AUTH) {
 		sprintf(msg, FMT_PREFIX "Station attempting %s with AP %s at: %s",
-			mactoa(sta->mac), signal, freq,
+			mactoa(sta->mac), freq, signal,
 			nfltoa(sta->flags), ssid, mgmttoa(mgmt_st), mactoa(da),
 			ctime(&tv->tv_sec));
 		msg[strlen(msg) - 1] = 0;
