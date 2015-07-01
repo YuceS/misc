@@ -1484,6 +1484,7 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 			nfltoa(sta->flags), sta->current_ssid,
 			sta->flags & NFL_AP? "AP": "Station",
 			ssid, ctime(&tv->tv_sec));
+		msg[strlen(msg) - 1] = 0;
 		log_node_message(sta, msg);
 	}
 
