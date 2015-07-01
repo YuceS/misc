@@ -1328,15 +1328,12 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 		if(tv->tv_sec - (sta->ping + INACTIVITY_TIMEOUT) > 0) {
 			sta->flags |= NFL_INACTIVE;
 		}
-
-		sta->ping = tv->tv_sec;
 	}
 	else {
 		sta = alloc_node();
 		memcpy(sta->mac, sa, MAC_LEN);
 		sta->flags |= NFL_NEW;
-		sta->created = tv->tv_sec;
-		sta->ping = tv->tv_sec;
+		sta->created = sta->ping = tv->tv_sec;
 	}
 
 	/* Update node flags */
@@ -1374,8 +1371,12 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 		&& mgmt_st == sta->mgmt[i]
 		&& !memcmp(sa, sta->sa[i], MAC_LEN)
 		&& !memcmp(da, sta->da[i], MAC_LEN)
-		&& !strcmp(ssid, sta->ssid[i]))
+		&& !strcmp(ssid, sta->ssid[i])) {
+
+		/* Update ping */
+		sta->ping = tv->tv_sec;
 		return 0;
+	}
 
 	/* Collect frame sample */
 	if(sta->sample + 1 == MAX_STA_SAMPLES) {
@@ -1413,13 +1414,12 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 		/* Report re-appearing nodes */
 		sta->flags &= ~NFL_INACTIVE;
 
-		t = 0;
-		if(i > 0) t = sta->ping - sta->tv[i - 1].tv_sec;
+		t = tv->tv_sec - sta->ping;
 		sprintf(msg, FMT_PREFIX "%s re-appeared doing %s after"
 			" being gone for %ldh%02ldm: %s", mactoa(sta->mac), signal,
 			nfltoa(sta->flags), ssid,
 			sta->flags & NFL_AP? "AP": "Station", mgmttoa(mgmt_st),
-			t / 3600, (t % 3600) / 60, ctime(&sta->ping));
+			t / 3600, (t % 3600) / 60, ctime(&tv->tv_sec));
 		msg[strlen(msg) - 1] = 0;
 		log_node_message(sta, msg);
 	}
@@ -1474,6 +1474,9 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 			sta->ssid[i - 1]);
 		log_node_message(sta, msg);
 	}
+
+	/* Update ping */
+	sta->ping = tv->tv_sec;
 
 	/* log SSID */
 	if(ssid[0] != 0)
