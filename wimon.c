@@ -1459,10 +1459,10 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 		memset(sta->current_ssid, 0, SSID_LEN);
 	}
 	else if(mgmt_st == MGMT_PROBE_REQ && strlen(ssid)) {
-		sprintf(msg, FMT_PREFIX "%s probing for SSID: %s",
+		sprintf(msg, FMT_PREFIX "%s probing for SSID '%s' at: %s",
 			mactoa(sta->mac), signal, nfltoa(sta->flags),
 			sta->current_ssid, sta->flags & NFL_AP? "AP": "Station",
-			ssid);
+			ssid, ctime(&tv->tv_sec));
 		log_node_message(sta, msg);
 	}
 
