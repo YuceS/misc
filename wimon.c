@@ -842,7 +842,7 @@ static int load_node_samples(sta_t *sta) {
 	/* Load samples and update sta {} in reverse order */
 	sprintf(q, "SELECT created,mgmt,freq,dbm,sa,da,ssid"
 		" FROM samples WHERE node_id=?"
-		" ORDER BY _ROWID_ DESC LIMIT %d", MIN_STA_SAMPLES);
+		" ORDER BY created DESC LIMIT %d", MIN_STA_SAMPLES);
 
 	rc = sqlite3_prepare_v2(db, q, -1, &stmt, NULL);
 	if(rc != SQLITE_OK) {
