@@ -1658,6 +1658,10 @@ int main(int c, char **v) {
 		return -1;
 	}
 
+	fprintf(stderr, "Memory: Using %zd MiBytes RAM for in-memory stations"
+		"(%d stations, up to %d samples/station)\n",
+		sizeof(nodes) / 1024 / 1024, MAX_NODES, MAX_STA_SAMPLES);
+
 	fprintf(stderr, "SQLite: Opening database %s\n", SQLITE3_NAME);
 	if(sqlite3_open(SQLITE3_NAME, &db)) {
 		fprintf(stderr, "Can't open database: %s\n", sqlite3_errmsg(db));
