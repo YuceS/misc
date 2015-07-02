@@ -1155,17 +1155,9 @@ static int log_node_message(const sta_t *sta, const char *msg) {
 	puts(msg);
 
 	if(stmt == NULL) {
-		char q[256];
-
-		sprintf(q, "INSERT INTO log (node_id,mac,created,log) "
-			"VALUES(?,?,?,?)");
-		if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
-			fprintf(stderr, "[log_node_message] SQLite: %s\n"
-				"SQL: %s\n", sqlite3_errmsg(db), q);
-			return -1;
-		}
-
-		rc = sqlite3_prepare_v2(db, q, -1, &stmt, NULL);
+		rc = sqlite3_prepare_v2(db,
+			"INSERT INTO log (node_id,mac,created,log) "
+			"VALUES(?,?,?,?)", -1, &stmt, NULL);
 		if(rc != SQLITE_OK) {
 			fprintf(stderr, "[log_node_message] SQLite: %s\n",
 				sqlite3_errmsg(db));
