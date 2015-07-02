@@ -236,6 +236,12 @@ static const char *nfltoa(const flags_t flags) {
 	return flags_out;
 }
 
+static const char *timetoa(const time_t *t) {
+	static char s[32];
+	strftime(s, sizeof(s), "%d %b %H:%M:%S", localtime(t));
+	return s;
+}
+
 static void register_db_stmt(sqlite3_stmt **stmt) {
 	prepared_stmts[num_prepared_stmts++] = stmt;
 	assert(num_prepared_stmts <= sizeof(prepared_stmts)/sizeof(prepared_stmts[0]));
@@ -1148,11 +1154,12 @@ static sta_t *lookup_node(const unsigned char *sa, time_t now) {
 }
 
 /* Write node_id, MAC, timestamp and msg to log table */
-static int log_node_message(const sta_t *sta, const char *msg) {
+static int log_node_message(const sta_t *sta, const time_t *t,
+				const char *msg) {
 	int rc;
 	static sqlite3_stmt *stmt;
 
-	puts(msg);
+	printf("%s %s\n", timetoa(t), msg);
 
 	if(stmt == NULL) {
 		rc = sqlite3_prepare_v2(db,
@@ -1175,7 +1182,7 @@ static int log_node_message(const sta_t *sta, const char *msg) {
 
 	sqlite3_bind_int64(stmt, 1, sta->id);
 	sqlite3_bind_text(stmt, 2, mactoa(sta->mac), -1, SQLITE_STATIC);
-	sqlite3_bind_int64(stmt, 3, sta->ping);
+	sqlite3_bind_int64(stmt, 3, *t);
 	sqlite3_bind_text(stmt, 4, msg, -1, SQLITE_STATIC);
 	while((rc = sqlite3_step(stmt)) != SQLITE_DONE) {
 		if(rc == SQLITE_BUSY) {
@@ -1417,33 +1424,31 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 			sta->flags & NFL_AP? "AP": "station",
 			mgmttoa(mgmt_st), ctime(&sta->created));
 		msg[strlen(msg) - 1] = 0;
-		log_node_message(sta, msg);
+		log_node_message(sta, &tv->tv_sec, msg);
 	}
 	else if(sta->flags & NFL_INACTIVE) {
 		/* Report re-appearing nodes */
 		sta->flags &= ~NFL_INACTIVE;
 
 		t = tv->tv_sec - sta->ping;
-		sprintf(msg, FMT_PREFIX "%s re-appeared doing %s after"
-			" being gone for %ldh%02ldm: %s",
+		sprintf(msg, FMT_PREFIX "%s re-appeared doing %s "
+			"after being gone for %ldh%02ldm",
 			mactoa(sta->mac), freq, signal,
 			nfltoa(sta->flags), ssid,
 			sta->flags & NFL_AP? "AP": "Station", mgmttoa(mgmt_st),
-			t / 3600, (t % 3600) / 60, ctime(&tv->tv_sec));
-		msg[strlen(msg) - 1] = 0;
-		log_node_message(sta, msg);
+			t / 3600, (t % 3600) / 60);
+		log_node_message(sta, &tv->tv_sec, msg);
 	}
 
 
 	/* Report associations */
 	if(mgmt_st == MGMT_ASSOC_REQ || mgmt_st == MGMT_REASSOC_REQ
 		|| mgmt_st == MGMT_AUTH) {
-		sprintf(msg, FMT_PREFIX "Station attempting %s with AP %s at: %s",
+		sprintf(msg, FMT_PREFIX "Station attempting %s with AP %s",
 			mactoa(sta->mac), freq, signal,
-			nfltoa(sta->flags), ssid, mgmttoa(mgmt_st), mactoa(da),
-			ctime(&tv->tv_sec));
-		msg[strlen(msg) - 1] = 0;
-		log_node_message(sta, msg);
+			nfltoa(sta->flags), ssid, mgmttoa(mgmt_st),
+			mactoa(da));
+		log_node_message(sta, &tv->tv_sec, msg);
 
 		/* XXX - we're not actually sure these reqs will succeed */
 		strncpy(sta->current_ssid, ssid, SSID_LEN);
@@ -1451,33 +1456,29 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 	}
 	else if(mgmt_st == MGMT_ASSOC_RSP || mgmt_st == MGMT_REASSOC_RSP
 		|| mgmt_st == MGMT_PROBE_RSP || mgmt_st == MGMT_DEAUTH) {
-		sprintf(msg, FMT_PREFIX "AP sent %s to station %s at: %s",
+		sprintf(msg, FMT_PREFIX "AP sent %s to station %s",
 			mactoa(sta->mac), freq, signal,
 			nfltoa(sta->flags), sta->current_ssid,
-			mgmttoa(mgmt_st), mactoa(da), ctime(&tv->tv_sec));
-		msg[strlen(msg) - 1] = 0;
-		log_node_message(sta, msg);
+			mgmttoa(mgmt_st), mactoa(da));
+		log_node_message(sta, &tv->tv_sec, msg);
 	}
 	else if(mgmt_st == MGMT_DISASSOC) {
-		sprintf(msg, FMT_PREFIX "%s disassociated with %s %s at: %s",
+		sprintf(msg, FMT_PREFIX "%s disassociated with %s %s",
 			mactoa(sta->mac), freq, signal,
 			nfltoa(sta->flags), sta->current_ssid,
 			sta->flags & NFL_AP? "AP": "Station",
-			sta->flags & NFL_AP? "station": "AP", mactoa(da),
-			ctime(&tv->tv_sec));
-		msg[strlen(msg) - 1] = 0;
-		log_node_message(sta, msg);
+			sta->flags & NFL_AP? "station": "AP",
+			mactoa(da));
+		log_node_message(sta, &tv->tv_sec, msg);
 
 		memset(sta->current_ssid, 0, SSID_LEN);
 	}
 	else if(mgmt_st == MGMT_PROBE_REQ && strlen(ssid)) {
-		sprintf(msg, FMT_PREFIX "%s probing for SSID '%s' at: %s",
+		sprintf(msg, FMT_PREFIX "%s probing for SSID: %s",
 			mactoa(sta->mac), freq, signal,
 			nfltoa(sta->flags), sta->current_ssid,
-			sta->flags & NFL_AP? "AP": "Station",
-			ssid, ctime(&tv->tv_sec));
-		msg[strlen(msg) - 1] = 0;
-		log_node_message(sta, msg);
+			sta->flags & NFL_AP? "AP": "Station", ssid);
+		log_node_message(sta, &tv->tv_sec, msg);
 	}
 
 	/* Report changes in SSID probes */
@@ -1486,7 +1487,7 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 			mactoa(sta->mac), freq, signal,
 			nfltoa(sta->flags), sta->current_ssid,
 			mgmttoa(sta->mgmt[i - 1]), sta->ssid[i - 1]);
-		log_node_message(sta, msg);
+		log_node_message(sta, &tv->tv_sec, msg);
 	}
 
 	/* Update ping */
@@ -1507,7 +1508,7 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 			mactoa(sta->mac), freq, signal,
 			nfltoa(sta->flags), ssid, signal - sta->dbm[i - 1],
 			sta->dbm[i - 1]);
-		log_node_message(sta, msg);
+		log_node_message(sta, &tv->tv_sec, msg);
 	}
 
 	return 0;
@@ -1555,8 +1556,7 @@ static int update(time_t now) {
 			sta->flags & NFL_AP? "AP": "Station",
 			t / 3600, (t % 3600) / 60, ctime(&sta->ping));
 		msg[strlen(msg) - 1] = 0;
-		puts(msg);
-		log_node_message(sta, msg);
+		log_node_message(sta, &now, msg);
 	}
 
 	gettimeofday(&tv, NULL);
