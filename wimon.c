@@ -255,13 +255,8 @@ static void unregister_db_stmts(void) {
 }
 
 /* Create necessary tables and indexes */
-static int create_db_tables(time_t now) {
+static int create_db_tables(void) {
 	char q[512];
-	struct tm tm;
-
-
-	now -= now % TABLE_PERIOD;
-	gmtime_r(&now, &tm);
 
 	sprintf(q, "CREATE TABLE IF NOT EXISTS nodes"
 		" (id INTEGER PRIMARY KEY ASC AUTOINCREMENT, mac TEXT,"
@@ -303,35 +298,6 @@ static int create_db_tables(time_t now) {
 	}
 
 
-	sprintf(q, "CREATE TABLE IF NOT EXISTS samples_%04d%02d%02d%02d"
-		" (node_id INTEGER,"
-		" created UNSIGNED integer, freq INTEGER, dbm INTEGER,"
-		" mgmt INTEGER, da TEXT, sa TEXT, ssid TEXT)",
-		tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour);
-	if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
-		fprintf(stderr, "SQLite: %s\nSQL: %s\n", sqlite3_errmsg(db), q);
-		return -1;
-	}
-
-	sprintf(q, "CREATE INDEX IF NOT EXISTS idx_samples_node_id_%04d%02d%02d%02d"
-		" ON samples_%04d%02d%02d%02d (node_id ASC)",
-		tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
-		tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour);
-	if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
-		fprintf(stderr, "SQLite: %s\nSQL: %s\n", sqlite3_errmsg(db), q);
-		return -1;
-	}
-
-	sprintf(q, "CREATE INDEX IF NOT EXISTS idx_samples_created_%04d%02d%02d%02d"
-		" ON samples_%04d%02d%02d%02d (created DESC)",
-		tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
-		tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour);
-	if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
-		fprintf(stderr, "SQLite: %s\nSQL: %s\n", sqlite3_errmsg(db), q);
-		return -1;
-	}
-
-
 	sprintf(q, "CREATE TABLE IF NOT EXISTS log (node_id INTEGER, mac TEXT,"
 		" created UNSIGNED INTEGER, log TEXT)");
 	if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
@@ -348,34 +314,6 @@ static int create_db_tables(time_t now) {
 
 	sprintf(q, "CREATE INDEX IF NOT EXISTS idx_log_created"
 		" ON log (created DESC)");
-	if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
-		fprintf(stderr, "SQLite: %s\nSQL: %s\n", sqlite3_errmsg(db), q);
-		return -1;
-	}
-
-
-	sprintf(q, "CREATE TABLE IF NOT EXISTS log_%04d%02d%02d%02d"
-		" (node_id INTEGER, mac TEXT,"
-		" created UNSIGNED INTEGER, log TEXT)",
-		tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour);
-	if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
-		fprintf(stderr, "SQLite: %s\nSQL: %s\n", sqlite3_errmsg(db), q);
-		return -1;
-	}
-
-	sprintf(q, "CREATE INDEX IF NOT EXISTS idx_log_node_id_%04d%02d%02d%02d"
-		" ON log_%04d%02d%02d%02d (node_id ASC)",
-		tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
-		tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour);
-	if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
-		fprintf(stderr, "SQLite: %s\nSQL: %s\n", sqlite3_errmsg(db), q);
-		return -1;
-	}
-
-	sprintf(q, "CREATE INDEX IF NOT EXISTS idx_log_created_%04d%02d%02d%02d"
-		" ON log_%04d%02d%02d%02d (created DESC)",
-		tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
-		tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour);
 	if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
 		fprintf(stderr, "SQLite: %s\nSQL: %s\n", sqlite3_errmsg(db), q);
 		return -1;
@@ -505,11 +443,49 @@ static int archive_data(time_t now) {
 			" between %s - %s\n", date, date_end);
 
 		/* Create archive tables if necessary */
-		create_db_tables(t);
+		sprintf(q, "CREATE TABLE IF NOT EXISTS"
+			" samples_%04d%02d%02d%02d (node_id INTEGER,"
+			" created UNSIGNED integer, freq INTEGER, dbm INTEGER,"
+			" mgmt INTEGER, da TEXT, sa TEXT, ssid TEXT)",
+			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+			tm.tm_hour);
+		if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
+			fprintf(stderr, "SQLite: %s\nSQL: %s\n",
+				sqlite3_errmsg(db), q);
+			return -1;
+		}
+
+		sprintf(q, "CREATE INDEX IF NOT EXISTS"
+			" idx_samples_node_id_%04d%02d%02d%02d"
+			" ON samples_%04d%02d%02d%02d (node_id ASC)",
+			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+			tm.tm_hour,
+			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+			tm.tm_hour);
+		if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
+			fprintf(stderr, "SQLite: %s\nSQL: %s\n",
+				sqlite3_errmsg(db), q);
+			return -1;
+		}
+
+		sprintf(q, "CREATE INDEX IF NOT EXISTS"
+			" idx_samples_created_%04d%02d%02d%02d"
+			" ON samples_%04d%02d%02d%02d (created DESC)",
+			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+			tm.tm_hour,
+			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+			tm.tm_hour);
+		if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
+			fprintf(stderr, "SQLite: %s\nSQL: %s\n",
+				sqlite3_errmsg(db), q);
+			return -1;
+		}
+
 
 		sprintf(q, "INSERT INTO samples_%04d%02d%02d%02d"
 			" SELECT * FROM samples WHERE created BETWEEN ? AND ?",
-			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour);
+			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+			tm.tm_hour);
 		rc = sqlite3_prepare_v2(db, q, -1, &stmt, NULL);
 		if(rc != SQLITE_OK) {
 			fprintf(stderr, "[archive_data] SQLite (samples): %s\n",
@@ -607,7 +583,39 @@ static int archive_data(time_t now) {
 			" between %s - %s\n", date, date_end);
 
 		/* Create archive tables if necessary */
-		create_db_tables(t);
+		sprintf(q, "CREATE TABLE IF NOT EXISTS log_%04d%02d%02d%02d"
+			" (node_id INTEGER, mac TEXT,"
+			" created UNSIGNED INTEGER, log TEXT)",
+			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+			tm.tm_hour);
+		if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
+			fprintf(stderr, "SQLite: %s\nSQL: %s\n",
+				sqlite3_errmsg(db), q);
+			return -1;
+		}
+
+		sprintf(q, "CREATE INDEX IF NOT EXISTS"
+			" idx_log_node_id_%04d%02d%02d%02d"
+			" ON log_%04d%02d%02d%02d (node_id ASC)",
+			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
+			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour);
+		if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
+			fprintf(stderr, "SQLite: %s\nSQL: %s\n",
+				sqlite3_errmsg(db), q);
+			return -1;
+		}
+
+		sprintf(q, "CREATE INDEX IF NOT EXISTS"
+			" idx_log_created_%04d%02d%02d%02d"
+			" ON log_%04d%02d%02d%02d (created DESC)",
+			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
+			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour);
+		if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
+			fprintf(stderr, "SQLite: %s\nSQL: %s\n",
+				sqlite3_errmsg(db), q);
+			return -1;
+		}
+
 
 		sprintf(q, "INSERT INTO log_%04d%02d%02d%02d"
 			" SELECT * FROM log WHERE created BETWEEN ? AND ?",
@@ -1700,12 +1708,12 @@ int main(int c, char **v) {
 	sqlite3_exec(db, "PRAGMA journal_mode=WAL", NULL, NULL, NULL);
 
 	fprintf(stderr, "SQLite: Initializing tables\n");
-	now = time(NULL);
-	create_db_tables(now);
+	if(create_db_tables() < 0)
+		return -1;
 
 	fprintf(stderr, "SQLite: Archiving old data\n");
 	do {
-		n = archive_data(now);
+		n = archive_data(time(NULL));
 		if(n < 0) {
 			sqlite3_close(db);
 			return -1;
@@ -1739,7 +1747,7 @@ int main(int c, char **v) {
 	signal(SIGUSR1, sighandler);
 
 	fprintf(stderr, "[main] Parsing tcpdump output for Wi-Fi frames...\n");
-	prev_report = prev_update = time(NULL);
+	now = prev_report = prev_update = time(NULL);
 	while(!do_exit && fgets(buf, sizeof(buf), fd) != NULL) {
 		char *temp;
 
