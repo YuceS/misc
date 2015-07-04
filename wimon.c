@@ -264,9 +264,9 @@ static int create_db_tables(time_t now) {
 	gmtime_r(&now, &tm);
 
 	sprintf(q, "CREATE TABLE IF NOT EXISTS nodes"
-			" (id INTEGER PRIMARY KEY ASC AUTOINCREMENT, mac TEXT,"
-			" created UNSIGNED INTEGER, ping UNSIGNED INTEGER,"
-			" flags UNSIGNED INTEGER, ssid TEXT)");
+		" (id INTEGER PRIMARY KEY ASC AUTOINCREMENT, mac TEXT,"
+		" created UNSIGNED INTEGER, ping UNSIGNED INTEGER,"
+		" flags UNSIGNED INTEGER, ssid TEXT)");
 	if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
 		fprintf(stderr, "SQLite: %s\nSQL: %s\n", sqlite3_errmsg(db), q);
 		return -1;
