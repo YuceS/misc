@@ -299,7 +299,7 @@ static int create_db_tables(void) {
 	}
 
 
-	sprintf(q, "CREATE TABLE IF NOT EXISTS log (node_id INTEGER, mac TEXT,"
+	sprintf(q, "CREATE TABLE IF NOT EXISTS log (node_id INTEGER,"
 		" created UNSIGNED INTEGER, log TEXT)");
 	if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
 		fprintf(stderr, "SQLite: %s\nSQL: %s\n", sqlite3_errmsg(db), q);
@@ -590,8 +590,8 @@ static int archive_data(time_t now) {
 
 		/* Create archive tables if necessary */
 		sprintf(q, "CREATE TABLE IF NOT EXISTS log_%04d%02d%02d%02d"
-			" (node_id INTEGER, mac TEXT,"
-			" created UNSIGNED INTEGER, log TEXT)",
+			" (node_id INTEGER, created UNSIGNED INTEGER,"
+			" log TEXT)",
 			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
 			tm.tm_hour);
 		if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
@@ -1185,8 +1185,8 @@ static int log_node_message(const sta_t *sta, const time_t *t,
 	if(stmt == NULL) {
 		char q[256];
 
-		sprintf(q, "INSERT INTO log (node_id,mac,created,log)"
-			" VALUES(?,?,?,?)");
+		sprintf(q, "INSERT INTO log (node_id,created,log)"
+			" VALUES(?,?,?)");
 		rc = sqlite3_prepare_v2(db, q, -1, &stmt, NULL);
 		if(rc != SQLITE_OK) {
 			fprintf(stderr, "[log_node_message] SQLite: %s\n",
@@ -1198,9 +1198,8 @@ static int log_node_message(const sta_t *sta, const time_t *t,
 	}
 
 	sqlite3_bind_int64(stmt, 1, sta->id);
-	sqlite3_bind_text(stmt, 2, mactoa(sta->mac), -1, SQLITE_STATIC);
-	sqlite3_bind_int64(stmt, 3, *t);
-	sqlite3_bind_text(stmt, 4, msg, -1, SQLITE_STATIC);
+	sqlite3_bind_int64(stmt, 2, *t);
+	sqlite3_bind_text(stmt, 3, msg, -1, SQLITE_STATIC);
 	while((rc = sqlite3_step(stmt)) != SQLITE_DONE) {
 		if(rc == SQLITE_BUSY) {
 			usleep(1000);
