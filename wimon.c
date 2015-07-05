@@ -238,6 +238,7 @@ static const char *nfltoa(const flags_t flags) {
 
 static const char *timetoa(const time_t *t) {
 	static char s[32];
+
 	strftime(s, sizeof(s), "%d %b %H:%M:%S", localtime(t));
 	return s;
 }
@@ -353,11 +354,14 @@ static int log_ssid_frame(sta_t *sta) {
 	int i, rc;
 
 	if(stmt == NULL) {
-		rc = sqlite3_prepare_v2(db,
-			"REPLACE INTO ssidlog (ssid,mac,ping,mgmt)"
-			" VALUES(?,?,?,?)", -1, &stmt, NULL);
+		char q[256];
+
+		sprintf(q, "REPLACE INTO ssidlog (ssid,mac,ping,mgmt)"
+			" VALUES(?,?,?,?)");
+		rc = sqlite3_prepare_v2(db, q, -1, &stmt, NULL);
 		if(rc != SQLITE_OK) {
-			fprintf(stderr, "[log_ssid_frame] SQLite: %s\n", sqlite3_errmsg(db));
+			fprintf(stderr, "[log_ssid_frame] SQLite: %s\n",
+				sqlite3_errmsg(db));
 			return -1;
 		}
 
@@ -375,14 +379,16 @@ static int log_ssid_frame(sta_t *sta) {
 			continue;
 		}
 
-		fprintf(stderr, "[log_ssid_frame] SQLite: %s\n", sqlite3_errmsg(db));
+		fprintf(stderr, "[log_ssid_frame] SQLite: %s\n",
+			sqlite3_errmsg(db));
 		sqlite3_reset(stmt);
 		return -1;
 	}
 
 	rc = sqlite3_reset(stmt);
 	if(rc != SQLITE_OK) {
-		fprintf(stderr, "[log_ssid_frame] SQLite: %s\n", sqlite3_errmsg(db));
+		fprintf(stderr, "[log_ssid_frame] SQLite: %s\n",
+			sqlite3_errmsg(db));
 		return -1;
 	}
 
@@ -390,18 +396,18 @@ static int log_ssid_frame(sta_t *sta) {
 }
 
 static int archive_data(time_t now) {
-	int n, rc;
-	struct timeval tv0, tv;
-	time_t t, t_end;
-	sqlite3_stmt *stmt;
-	struct tm tm, tm_end;
 	char date[20], date_end[20], q[256];
+	int n, rc;
+	time_t t, t_end;
+	struct timeval tv0, tv;
+	struct tm tm, tm_end;
+	sqlite3_stmt *stmt;
 
 	gettimeofday(&tv0, NULL);
 
 	n = 0;
-	rc = sqlite3_prepare_v2(db,
-		"SELECT IFNULL(MIN(created), 0) FROM samples", -1, &stmt, NULL);
+	sprintf(q, "SELECT IFNULL(MIN(created), 0) FROM samples");
+	rc = sqlite3_prepare_v2(db, q, -1, &stmt, NULL);
 	if(rc != SQLITE_OK) {
 		fprintf(stderr, "[archive_data] SQLite: %s\n",
 			sqlite3_errmsg(db));
@@ -510,8 +516,8 @@ static int archive_data(time_t now) {
 		sqlite3_finalize(stmt);
 		n += sqlite3_changes(db);
 
-		rc = sqlite3_prepare_v2(db, "DELETE FROM samples"
-			" WHERE created BETWEEN ? AND ?", -1, &stmt, NULL);
+		sprintf(q, "DELETE FROM samples WHERE created BETWEEN ? AND ?");
+		rc = sqlite3_prepare_v2(db, q, -1, &stmt, NULL);
 		if(rc != SQLITE_OK) {
 			fprintf(stderr, "[archive_data] SQLite (samples): %s\n",
 				sqlite3_errmsg(db));
@@ -542,8 +548,8 @@ static int archive_data(time_t now) {
 	}
 
 
-	rc = sqlite3_prepare_v2(db,
-		"SELECT IFNULL(MIN(created), 0) FROM log", -1, &stmt, NULL);
+	sprintf(q, "SELECT IFNULL(MIN(created), 0) FROM log");
+	rc = sqlite3_prepare_v2(db, q, -1, &stmt, NULL);
 	if(rc != SQLITE_OK) {
 		fprintf(stderr, "[archive_data] SQLite: %s\n",
 			sqlite3_errmsg(db));
@@ -644,8 +650,8 @@ static int archive_data(time_t now) {
 		sqlite3_finalize(stmt);
 		n += sqlite3_changes(db);
 
-		rc = sqlite3_prepare_v2(db, "DELETE FROM log"
-			" WHERE created BETWEEN ? AND ?", -1, &stmt, NULL);
+		sprintf(q, "DELETE FROM log WHERE created BETWEEN ? AND ?");
+		rc = sqlite3_prepare_v2(db, q, -1, &stmt, NULL);
 		if(rc != SQLITE_OK) {
 			fprintf(stderr, "[archive_data] SQLite (logs): %s\n",
 				sqlite3_errmsg(db));
@@ -680,15 +686,18 @@ static int archive_data(time_t now) {
 
 /* Insert node into database */
 static int insert_node(sta_t *sta) {
-	int rc;
 	static sqlite3_stmt *stmt;
+	int rc;
 
 	if(stmt == NULL) {
-		rc = sqlite3_prepare_v2(db,
-			"INSERT INTO nodes (id,mac,created,ping,flags,ssid)"
-			" VALUES(?,?,?,?,?,?)", -1, &stmt, NULL);
+		char q[256];
+
+		sprintf(q, "INSERT INTO nodes (id,mac,created,ping,flags,ssid)"
+			"VALUES(?,?,?,?,?,?)");
+		rc = sqlite3_prepare_v2(db, q, -1, &stmt, NULL);
 		if(rc != SQLITE_OK) {
-			fprintf(stderr, "[insert_node] SQLite: %s\n", sqlite3_errmsg(db));
+			fprintf(stderr, "[insert_node] SQLite: %s\n",
+				sqlite3_errmsg(db));
 			return -1;
 		}
 
@@ -715,7 +724,8 @@ static int insert_node(sta_t *sta) {
 			continue;
 		}
 
-		fprintf(stderr, "[insert_node] SQLite: %s\n", sqlite3_errmsg(db));
+		fprintf(stderr, "[insert_node] SQLite: %s\n",
+			sqlite3_errmsg(db));
 		sqlite3_reset(stmt);
 		return -1;
 	}
@@ -724,7 +734,8 @@ static int insert_node(sta_t *sta) {
 
 	rc = sqlite3_reset(stmt);
 	if(rc != SQLITE_OK) {
-		fprintf(stderr, "[insert_node] SQLite: %s\n", sqlite3_errmsg(db));
+		fprintf(stderr, "[insert_node] SQLite: %s\n",
+			sqlite3_errmsg(db));
 		return -1;
 	}
 
@@ -733,22 +744,23 @@ static int insert_node(sta_t *sta) {
 
 /* Store node samples (timestamp, mgmt frame type, signal level, ssid) */
 static int save_node_samples(sta_t *sta) {
-	int i, rc, n;
 	static sqlite3_stmt *stmt;
-	char q[256];
-	struct timeval tv0, tv;
+	int i, rc, n;
 	time_t t;
+	struct timeval tv0, tv;
 
 	gettimeofday(&tv0, NULL);
 
 	if(stmt == NULL) {
+		char q[256];
+
 		sprintf(q, "INSERT INTO samples"
 			" (node_id,created,mgmt,freq,dbm,sa,da,ssid)"
 			" VALUES(?,?,?,?,?,?,?,?)");
-
 		rc = sqlite3_prepare_v2(db, q, -1, &stmt, NULL);
 		if(rc != SQLITE_OK) {
-			fprintf(stderr, "[save_node_samples] SQLite: %s\n", sqlite3_errmsg(db));
+			fprintf(stderr, "[save_node_samples] SQLite: %s\n",
+				sqlite3_errmsg(db));
 			return -1;
 		}
 
@@ -817,9 +829,9 @@ static int load_node_samples(sta_t *sta) {
 	char q[256];
 	const unsigned char *p;
 	int rc, i, j, n, v;
-	sqlite3_stmt *stmt_count, *stmt;
-	struct timeval tv0, tv;
 	time_t t;
+	struct timeval tv0, tv;
+	sqlite3_stmt *stmt_count, *stmt;
 
 	gettimeofday(&tv0, NULL);
 
@@ -857,7 +869,6 @@ static int load_node_samples(sta_t *sta) {
 	sprintf(q, "SELECT created,mgmt,freq,dbm,sa,da,ssid"
 		" FROM samples WHERE node_id=?"
 		" ORDER BY created DESC LIMIT %d", MIN_STA_SAMPLES);
-
 	rc = sqlite3_prepare_v2(db, q, -1, &stmt, NULL);
 	if(rc != SQLITE_OK) {
 		fprintf(stderr, "[load_node_samples] SQLite (prep, node %ld): %s\n",
@@ -919,10 +930,10 @@ static int load_node_samples(sta_t *sta) {
 
 /* Update node mac, ping time, flags and ssid */
 static int save_node(sta_t *sta) {
-	int rc;
 	static sqlite3_stmt *stmt;
-	struct timeval tv0, tv;
+	int rc;
 	time_t t;
+	struct timeval tv0, tv;
 
 	gettimeofday(&tv0, NULL);
 
@@ -935,9 +946,11 @@ static int save_node(sta_t *sta) {
 	}
 
 	if(stmt == NULL) {
-		rc = sqlite3_prepare_v2(db, "UPDATE nodes"
-			" SET mac=?, ping=?, flags=?, ssid=? WHERE id=?",
-			-1, &stmt, NULL);
+		char q[256];
+
+		sprintf(q, "UPDATE nodes SET mac=?,ping=?,flags=?,ssid=?"
+			" WHERE id=?");
+		rc = sqlite3_prepare_v2(db, q, -1, &stmt, NULL);
 		if(rc != SQLITE_OK) {
 			fprintf(stderr, "[save_node] SQLite: %s\n", sqlite3_errmsg(db));
 			return -1;
@@ -989,10 +1002,9 @@ static int save_node(sta_t *sta) {
 /* Get rid of specified node or oldest node if NULL arg */
 static void evict_node(sta_t *sta) {
 	int i, target;
-	time_t oldest;
-	sta_t *last;
+	time_t oldest, t;
 	struct timeval tv0, tv;
-	time_t t;
+	sta_t *last;
 
 	gettimeofday(&tv0, NULL);
 
@@ -1080,9 +1092,9 @@ static sta_t *alloc_node(void) {
  * If not found, return NULL
  */
 static sta_t *lookup_node(const unsigned char *sa, time_t now) {
-	int rc, i, v;
-	const unsigned char *p;
 	static sqlite3_stmt *stmt;
+	const unsigned char *p;
+	int rc, i, v;
 	sta_t *sta;
 
 	/* Lookup in cache */
@@ -1094,9 +1106,11 @@ static sta_t *lookup_node(const unsigned char *sa, time_t now) {
 
 	/* Lookup in database */
 	if(stmt == NULL) {
-		rc = sqlite3_prepare_v2(db,
-			"SELECT id,mac,created,ping,flags,ssid FROM nodes"
-			" WHERE mac=?", -1, &stmt, NULL);
+		char q[256];
+
+		sprintf(q, "SELECT id,mac,created,ping,flags,ssid"
+			" FROM nodes WHERE mac=?");
+		rc = sqlite3_prepare_v2(db, q, -1, &stmt, NULL);
 		if(rc != SQLITE_OK) {
 			fprintf(stderr, "[lookup_node] SQLite: %s\n",
 				sqlite3_errmsg(db));
@@ -1163,15 +1177,17 @@ static sta_t *lookup_node(const unsigned char *sa, time_t now) {
 /* Write node_id, MAC, timestamp and msg to log table */
 static int log_node_message(const sta_t *sta, const time_t *t,
 				const char *msg) {
-	int rc;
 	static sqlite3_stmt *stmt;
+	int rc;
 
 	printf("%s %s\n", timetoa(t), msg);
 
 	if(stmt == NULL) {
-		rc = sqlite3_prepare_v2(db,
-			"INSERT INTO log (node_id,mac,created,log) "
-			"VALUES(?,?,?,?)", -1, &stmt, NULL);
+		char q[256];
+
+		sprintf(q, "INSERT INTO log (node_id,mac,created,log)"
+			" VALUES(?,?,?,?)");
+		rc = sqlite3_prepare_v2(db, q, -1, &stmt, NULL);
 		if(rc != SQLITE_OK) {
 			fprintf(stderr, "[log_node_message] SQLite: %s\n",
 				sqlite3_errmsg(db));
@@ -1207,13 +1223,12 @@ static int log_node_message(const sta_t *sta, const time_t *t,
 }
 
 static int parse_tcpdump(char *line, unsigned char *bssid, unsigned char *da,
-		unsigned char *sa, unsigned short *freq, short *signal,
-		struct timeval *tv, mgmt_st_t *mgmt_st, char *ssid) {
-
+			unsigned char *sa, unsigned short *freq, short *signal,
+			struct timeval *tv, mgmt_st_t *mgmt_st, char *ssid) {
 	char *p, *ws;
-	size_t i, j, n, v;
-	long sec, usec;
 	unsigned char *m;
+	long sec, usec;
+	size_t i, j, n, v;
 
 	n = strlen(line);
 	i = 0;
@@ -1522,11 +1537,11 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 }
 
 static int update(time_t now) {
-	int i;
-	sta_t *sta;
 	char msg[1024];
-	struct timeval tv0, tv;
+	int i;
 	time_t t;
+	struct timeval tv0, tv;
+	sta_t *sta;
 
 	gettimeofday(&tv0, NULL);
 	for(i = 0; i < num_nodes; i++) {
@@ -1627,9 +1642,11 @@ static int oui_import(FILE *fd) {
 	int rc;
 	sqlite3_stmt *stmt;
 
-	rc = sqlite3_prepare_v2(db, "INSERT INTO oui VALUES(?,?)", -1, &stmt, NULL);
+	rc = sqlite3_prepare_v2(db,
+		"INSERT INTO oui VALUES(?,?)", -1, &stmt, NULL);
 	if(rc != SQLITE_OK) {
-		fprintf(stderr, "[oui_import] SQLite: %s\n", sqlite3_errmsg(db));
+		fprintf(stderr, "[oui_import] SQLite: %s\n",
+			sqlite3_errmsg(db));
 		return -1;
 	}
 
@@ -1687,7 +1704,7 @@ int main(int c, char **v) {
 	}
 
 	fprintf(stderr, "Memory: Using %zd MiBytes RAM for in-memory stations"
-		"(%d stations, up to %d samples/station)\n",
+		" (%d stations, up to %d samples/station)\n",
 		sizeof(nodes) / 1024 / 1024, MAX_NODES, MAX_STA_SAMPLES);
 
 	fprintf(stderr, "SQLite: Opening database %s\n", SQLITE3_NAME);
