@@ -1419,8 +1419,8 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 	/* Ignore update if nothing changed */
 	i = sta->sample - 1;
 	if(i >= 0 && tv->tv_sec == sta->tv[i].tv_sec
-		&& signal == sta->dbm[i]
 		&& mgmt_st == sta->mgmt[i]
+		&& (signal >= sta->dbm[i] - 12 && signal <= sta->dbm[i] + 12)
 		&& !memcmp(bssid, sta->bssid[i], MAC_LEN)
 		&& !memcmp(sa, sta->sa[i], MAC_LEN)
 		&& !memcmp(da, sta->da[i], MAC_LEN)
