@@ -364,12 +364,6 @@ static int log_ssid_frame(sta_t *sta) {
 		register_db_stmt(&stmt);
 	}
 
-	rc = sqlite3_reset(stmt);
-	if(rc != SQLITE_OK) {
-		fprintf(stderr, "[log_ssid_frame] SQLite: %s\n", sqlite3_errmsg(db));
-		return -1;
-	}
-
 	i = sta->sample - 1;
 	sqlite3_bind_text(stmt, 1, sta->ssid[i], -1, SQLITE_STATIC);
 	sqlite3_bind_text(stmt, 2, mactoa(sta->sa[i]), -1, SQLITE_STATIC);
@@ -383,6 +377,12 @@ static int log_ssid_frame(sta_t *sta) {
 
 		fprintf(stderr, "[log_ssid_frame] SQLite: %s\n", sqlite3_errmsg(db));
 		sqlite3_reset(stmt);
+		return -1;
+	}
+
+	rc = sqlite3_reset(stmt);
+	if(rc != SQLITE_OK) {
+		fprintf(stderr, "[log_ssid_frame] SQLite: %s\n", sqlite3_errmsg(db));
 		return -1;
 	}
 
@@ -695,12 +695,6 @@ static int insert_node(sta_t *sta) {
 		register_db_stmt(&stmt);
 	}
 
-	rc = sqlite3_reset(stmt);
-	if(rc != SQLITE_OK) {
-		fprintf(stderr, "[insert_node] SQLite: %s\n", sqlite3_errmsg(db));
-		return -1;
-	}
-
 	if(sta->id == 0)
 		sqlite3_bind_null(stmt, 1);
 	else
@@ -727,6 +721,12 @@ static int insert_node(sta_t *sta) {
 	}
 
 	sta->id = sqlite3_last_insert_rowid(db);
+
+	rc = sqlite3_reset(stmt);
+	if(rc != SQLITE_OK) {
+		fprintf(stderr, "[insert_node] SQLite: %s\n", sqlite3_errmsg(db));
+		return -1;
+	}
 
 	return 0;
 }
@@ -756,13 +756,6 @@ static int save_node_samples(sta_t *sta) {
 	}
 
 	for(n = 0, i = sta->stored_samples; i < sta->sample; n++, i++) {
-		rc = sqlite3_reset(stmt);
-		if(rc != SQLITE_OK) {
-			fprintf(stderr, "[save_node_samples] SQLite: %s\n",
-				sqlite3_errmsg(db));
-			return -1;
-		}
-
 		sqlite3_bind_int64(stmt, 1, sta->id);
 		sqlite3_bind_int64(stmt, 2, sta->tv[i].tv_sec);
 		sqlite3_bind_int(stmt, 3, sta->mgmt[i]);
@@ -783,6 +776,13 @@ static int save_node_samples(sta_t *sta) {
 			fprintf(stderr, "[save_node_samples] SQLite: %s\n",
 				sqlite3_errmsg(db));
 			sqlite3_reset(stmt);
+			return -1;
+		}
+
+		rc = sqlite3_reset(stmt);
+		if(rc != SQLITE_OK) {
+			fprintf(stderr, "[save_node_samples] SQLite: %s\n",
+				sqlite3_errmsg(db));
 			return -1;
 		}
 
@@ -946,12 +946,6 @@ static int save_node(sta_t *sta) {
 		register_db_stmt(&stmt);
 	}
 
-	rc = sqlite3_reset(stmt);
-	if(rc != SQLITE_OK) {
-		fprintf(stderr, "[save_node] SQLite: %s\n", sqlite3_errmsg(db));
-		return -1;
-	}
-
 	sqlite3_bind_text(stmt, 1, mactoa(sta->mac), -1, SQLITE_STATIC);
 	sqlite3_bind_int64(stmt, 2, sta->ping);
 	sqlite3_bind_int(stmt, 3, sta->flags & (~NFL_TRANSIENT_MASK));
@@ -968,8 +962,13 @@ static int save_node(sta_t *sta) {
 		}
 
 		fprintf(stderr, "[save_node] SQLite: %s\n", sqlite3_errmsg(db));
-		sqlite3_reset(stmt);
 		break;
+	}
+
+	rc = sqlite3_reset(stmt);
+	if(rc != SQLITE_OK) {
+		fprintf(stderr, "[save_node] SQLite: %s\n", sqlite3_errmsg(db));
+		return -1;
 	}
 
 	if(save_node_samples(sta) < 0) {
@@ -1107,12 +1106,6 @@ static sta_t *lookup_node(const unsigned char *sa, time_t now) {
 		register_db_stmt(&stmt);
 	}
 
-	rc = sqlite3_reset(stmt);
-	if(rc != SQLITE_OK) {
-		fprintf(stderr, "[lookup_node] SQLite: %s\n", sqlite3_errmsg(db));
-		return NULL;
-	}
-
 	sqlite3_bind_text(stmt, 1, mactoa(sa), -1, SQLITE_STATIC);
 
 	sta = NULL;
@@ -1124,8 +1117,7 @@ static sta_t *lookup_node(const unsigned char *sa, time_t now) {
 		else if(rc != SQLITE_ROW) {
 			fprintf(stderr, "[lookup_node] SQLite: %s\n",
 				sqlite3_errmsg(db));
-			sqlite3_reset(stmt);
-			return sta;
+			break;
 		}
 
 		sta = alloc_node();
@@ -1148,14 +1140,21 @@ static sta_t *lookup_node(const unsigned char *sa, time_t now) {
 			sta->current_ssid[SSID_LEN - 1] = 0;
 		}
 
-		fprintf(stderr, "[lookup_node] Found node %s in SQLite\n", mactoa(sta->mac));
-		if(load_node_samples(sta) == 0)
-			continue;
+		fprintf(stderr, "[lookup_node] Found node %s in SQLite\n",
+			mactoa(sta->mac));
 
-		fprintf(stderr, "[lookup_node] Failed to load samples for id %ld\n",
-			sta->id);
-		sqlite3_reset(stmt);
-		return sta;
+		if(load_node_samples(sta) < 0) {
+			fprintf(stderr, "[lookup_node] Failed to load samples "
+				"for id %ld\n", sta->id);
+			break;
+		}
+	}
+
+	rc = sqlite3_reset(stmt);
+	if(rc != SQLITE_OK) {
+		fprintf(stderr, "[lookup_node] SQLite: %s\n",
+			sqlite3_errmsg(db));
+		return NULL;
 	}
 
 	return sta;
@@ -1182,12 +1181,6 @@ static int log_node_message(const sta_t *sta, const time_t *t,
 		register_db_stmt(&stmt);
 	}
 
-	if(sqlite3_reset(stmt) != SQLITE_OK) {
-		fprintf(stderr, "[log_node_message] SQLite: %s\n",
-			sqlite3_errmsg(db));
-		return -1;
-	}
-
 	sqlite3_bind_int64(stmt, 1, sta->id);
 	sqlite3_bind_text(stmt, 2, mactoa(sta->mac), -1, SQLITE_STATIC);
 	sqlite3_bind_int64(stmt, 3, *t);
@@ -1201,6 +1194,12 @@ static int log_node_message(const sta_t *sta, const time_t *t,
 		fprintf(stderr, "[log_node_message] SQLite: %s\n",
 			sqlite3_errmsg(db));
 		sqlite3_reset(stmt);
+		return -1;
+	}
+
+	if(sqlite3_reset(stmt) != SQLITE_OK) {
+		fprintf(stderr, "[log_node_message] SQLite: %s\n",
+			sqlite3_errmsg(db));
 		return -1;
 	}
 
@@ -1643,10 +1642,6 @@ static int oui_import(FILE *fd) {
 		for(; *p && *p != '\r' && *p != '\n'; p++);
 		*p = 0;
 
-		if(sqlite3_reset(stmt) != SQLITE_OK) {
-			fprintf(stderr, "[oui_import] SQLite: %s\n", sqlite3_errmsg(db));
-		}
-
 		sqlite3_bind_text(stmt, 1, hex, -1, SQLITE_STATIC);
 		sqlite3_bind_text(stmt, 2, org, -1, SQLITE_STATIC);
 		while((rc = sqlite3_step(stmt)) != SQLITE_DONE) {
@@ -1655,10 +1650,16 @@ static int oui_import(FILE *fd) {
 				continue;
 			}
 
-			fprintf(stderr, "[oui_import] SQLite: %s\n", sqlite3_errmsg(db));
-			fprintf(stderr, "[out_import] Offending MAC: %s\n", hex);
-			sqlite3_reset(stmt);
+			fprintf(stderr, "[oui_import] SQLite: %s\n",
+				sqlite3_errmsg(db));
+			fprintf(stderr, "[out_import] Offending MAC: %s\n",
+				hex);
 			break;
+		}
+
+		if(sqlite3_reset(stmt) != SQLITE_OK) {
+			fprintf(stderr, "[oui_import] SQLite: %s\n",
+				sqlite3_errmsg(db));
 		}
 	}
 
