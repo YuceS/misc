@@ -138,6 +138,7 @@ typedef struct station {
 	short dbm[MAX_STA_SAMPLES];
 	mgmt_st_t mgmt[MAX_STA_SAMPLES];
 	char ssid[MAX_STA_SAMPLES][SSID_LEN];
+	unsigned char bssid[MAX_STA_SAMPLES][MAC_LEN];
 	unsigned char sa[MAX_STA_SAMPLES][MAC_LEN];
 	unsigned char da[MAX_STA_SAMPLES][MAC_LEN];
 } sta_t;
@@ -278,7 +279,7 @@ static int create_db_tables(void) {
 
 	sprintf(q, "CREATE TABLE IF NOT EXISTS samples (node_id INTEGER,"
 		" created UNSIGNED integer, freq INTEGER, dbm INTEGER,"
-		" mgmt INTEGER, da TEXT, sa TEXT, ssid TEXT)");
+		" mgmt INTEGER, bssid TEXT, da TEXT, sa TEXT, ssid TEXT)");
 	if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
 		fprintf(stderr, "SQLite: %s\nSQL: %s\n", sqlite3_errmsg(db), q);
 		return -1;
@@ -452,7 +453,8 @@ static int archive_data(time_t now) {
 		sprintf(q, "CREATE TABLE IF NOT EXISTS"
 			" samples_%04d%02d%02d%02d (node_id INTEGER,"
 			" created UNSIGNED integer, freq INTEGER, dbm INTEGER,"
-			" mgmt INTEGER, da TEXT, sa TEXT, ssid TEXT)",
+			" mgmt INTEGER, bssid TEXT, da TEXT, sa TEXT, "
+			" ssid TEXT)",
 			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
 			tm.tm_hour);
 		if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
@@ -755,8 +757,8 @@ static int save_node_samples(sta_t *sta) {
 		char q[256];
 
 		sprintf(q, "INSERT INTO samples"
-			" (node_id,created,mgmt,freq,dbm,sa,da,ssid)"
-			" VALUES(?,?,?,?,?,?,?,?)");
+			" (node_id,created,mgmt,freq,dbm,bssid,sa,da,ssid)"
+			" VALUES(?,?,?,?,?,?,?,?,?)");
 		rc = sqlite3_prepare_v2(db, q, -1, &stmt, NULL);
 		if(rc != SQLITE_OK) {
 			fprintf(stderr, "[save_node_samples] SQLite: %s\n",
@@ -773,12 +775,13 @@ static int save_node_samples(sta_t *sta) {
 		sqlite3_bind_int(stmt, 3, sta->mgmt[i]);
 		sqlite3_bind_int(stmt, 4, sta->freq[i]);
 		sqlite3_bind_int(stmt, 5, sta->dbm[i]);
-		sqlite3_bind_text(stmt, 6, mactoa(sta->sa[i]), -1, SQLITE_TRANSIENT);
-		sqlite3_bind_text(stmt, 7, mactoa(sta->da[i]), -1, SQLITE_TRANSIENT);
+		sqlite3_bind_text(stmt, 6, mactoa(sta->bssid[i]), -1, SQLITE_TRANSIENT);
+		sqlite3_bind_text(stmt, 7, mactoa(sta->sa[i]), -1, SQLITE_TRANSIENT);
+		sqlite3_bind_text(stmt, 8, mactoa(sta->da[i]), -1, SQLITE_TRANSIENT);
 		if(sta->ssid[i][0] == 0)
-			sqlite3_bind_null(stmt, 8);
+			sqlite3_bind_null(stmt, 9);
 		else
-			sqlite3_bind_text(stmt, 8, sta->ssid[i], -1, SQLITE_STATIC);
+			sqlite3_bind_text(stmt, 9, sta->ssid[i], -1, SQLITE_STATIC);
 		while((rc = sqlite3_step(stmt)) != SQLITE_DONE) {
 			if(rc == SQLITE_BUSY) {
 				usleep(1000);
@@ -808,6 +811,7 @@ static int save_node_samples(sta_t *sta) {
 		memmove(sta->freq, &sta->freq[i], sta->sample * sizeof(sta->freq[0]));
 		memmove(sta->dbm, &sta->dbm[i], sta->sample * sizeof(sta->dbm[0]));
 		memmove(sta->mgmt, &sta->mgmt[i], sta->sample * sizeof(sta->mgmt[0]));
+		memmove(sta->bssid, &sta->bssid[i], sta->sample * MAC_LEN);
 		memmove(sta->sa, &sta->sa[i], sta->sample * MAC_LEN);
 		memmove(sta->da, &sta->da[i], sta->sample * MAC_LEN);
 		memmove(sta->ssid, &sta->ssid[i], sta->sample * SSID_LEN);
@@ -866,7 +870,7 @@ static int load_node_samples(sta_t *sta) {
 
 
 	/* Load samples and update sta {} in reverse order */
-	sprintf(q, "SELECT created,mgmt,freq,dbm,sa,da,ssid"
+	sprintf(q, "SELECT created,mgmt,freq,dbm,bssid,sa,da,ssid"
 		" FROM samples WHERE node_id=?"
 		" ORDER BY created DESC LIMIT %d", MIN_STA_SAMPLES);
 	rc = sqlite3_prepare_v2(db, q, -1, &stmt, NULL);
@@ -899,16 +903,21 @@ static int load_node_samples(sta_t *sta) {
 		p = sqlite3_column_text(stmt, 4);
 		for(j = 0; j < 18; j += 3) {
 			sscanf((char *)&p[j], "%02x", &v);
-			sta->sa[i][j / 3] = (unsigned char)v;
+			sta->bssid[i][j / 3] = (unsigned char)v;
 		}
 		p = sqlite3_column_text(stmt, 5);
+		for(j = 0; j < 18; j += 3) {
+			sscanf((char *)&p[j], "%02x", &v);
+			sta->sa[i][j / 3] = (unsigned char)v;
+		}
+		p = sqlite3_column_text(stmt, 6);
 		for(j = 0; j < 18; j += 3) {
 			sscanf((char *)&p[j], "%02x", &v);
 			sta->da[i][j / 3] = (unsigned char)v;
 		}
 
 		sta->ssid[i][0] = 0;
-		if((p = sqlite3_column_text(stmt, 6)) != NULL) {
+		if((p = sqlite3_column_text(stmt, 7)) != NULL) {
 			strncpy(sta->ssid[i], (char *)p, SSID_LEN);
 			sta->ssid[i][SSID_LEN - 1] = 0;
 		}
@@ -1042,6 +1051,7 @@ static void evict_node(sta_t *sta) {
 		memmove(sta->freq, last->freq, last->sample * sizeof(sta->freq[0]));
 		memmove(sta->dbm, last->dbm, last->sample * sizeof(sta->dbm[0]));
 		memmove(sta->mgmt, last->mgmt, last->sample * sizeof(sta->mgmt[0]));
+		memmove(sta->bssid, last->bssid, last->sample * MAC_LEN);
 		memmove(sta->sa, last->sa, last->sample * MAC_LEN);
 		memmove(sta->da, last->da, last->sample * MAC_LEN);
 		memmove(sta->ssid, last->ssid, last->sample * SSID_LEN);
@@ -1079,6 +1089,7 @@ static sta_t *alloc_node(void) {
 	memset(sta->freq, 0, sizeof(sta->freq));
 	memset(sta->dbm, 0, sizeof(sta->dbm));
 	memset(sta->mgmt, 0, sizeof(sta->mgmt));
+	memset(sta->bssid, 0, sizeof(sta->bssid));
 	memset(sta->sa, 0, sizeof(sta->sa));
 	memset(sta->da, 0, sizeof(sta->da));
 	memset(sta->ssid, 0, sizeof(sta->ssid));
@@ -1410,6 +1421,7 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 	if(i >= 0 && tv->tv_sec == sta->tv[i].tv_sec
 		&& signal == sta->dbm[i]
 		&& mgmt_st == sta->mgmt[i]
+		&& !memcmp(bssid, sta->bssid[i], MAC_LEN)
 		&& !memcmp(sa, sta->sa[i], MAC_LEN)
 		&& !memcmp(da, sta->da[i], MAC_LEN)
 		&& !strcmp(ssid, sta->ssid[i])) {
@@ -1430,6 +1442,7 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 	sta->freq[i] = freq;
 	sta->dbm[i] = signal;
 	sta->mgmt[i] = mgmt_st;
+	memcpy(sta->bssid[i], bssid, MAC_LEN);
 	memcpy(sta->sa[i], sa, MAC_LEN);
 	memcpy(sta->da[i], da, MAC_LEN);
 	strncpy(sta->ssid[i], ssid, SSID_LEN);
