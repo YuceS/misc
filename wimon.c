@@ -1380,8 +1380,9 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 	/* Update node flags */
 	if(mgmt_st == MGMT_BEACON || mgmt_st == MGMT_PROBE_RSP
 		|| mgmt_st == MGMT_ASSOC_RSP
-		|| mgmt_st == MGMT_REASSOC_RSP || mgmt_st == MGMT_DEAUTH
-		|| (mgmt_st == MGMT_DISASSOC && !memcmp(sa, bssid, 6))) {
+		|| mgmt_st == MGMT_REASSOC_RSP
+		|| (mgmt_st == MGMT_DISASSOC && !memcmp(sa, bssid, 6))
+		|| (mgmt_st == MGMT_DEAUTH && !memcmp(sa, bssid, 6))) {
 
 		sta->flags |= NFL_AP;
 		if(sta->flags & NFL_STA) {
@@ -1477,23 +1478,19 @@ static int process_frame(const unsigned char *bssid, const unsigned char *da,
 		sta->current_ssid[SSID_LEN - 1] = 0;
 	}
 	else if(mgmt_st == MGMT_ASSOC_RSP || mgmt_st == MGMT_REASSOC_RSP
-		|| mgmt_st == MGMT_PROBE_RSP || mgmt_st == MGMT_DEAUTH) {
-		sprintf(msg, FMT_PREFIX "AP sent %s to station %s",
+		|| mgmt_st == MGMT_DISASSOC || mgmt_st == MGMT_DEAUTH
+		|| mgmt_st == MGMT_PROBE_RSP) {
+		sprintf(msg, FMT_PREFIX "%s sent %s to %s %s",
 			mactoa(sta->mac), freq, signal,
 			nfltoa(sta->flags), sta->current_ssid,
-			mgmttoa(mgmt_st), mactoa(da));
-		log_node_message(sta, &tv->tv_sec, msg);
-	}
-	else if(mgmt_st == MGMT_DISASSOC) {
-		sprintf(msg, FMT_PREFIX "%s disassociated with %s %s",
-			mactoa(sta->mac), freq, signal,
-			nfltoa(sta->flags), sta->current_ssid,
-			sta->flags & NFL_AP? "AP": "Station",
-			sta->flags & NFL_AP? "station": "AP",
-			mactoa(da));
+			sta->flags & NFL_AP? "AP": "Station", mgmttoa(mgmt_st),
+			sta->flags & NFL_AP? "station": "AP", mactoa(da));
 		log_node_message(sta, &tv->tv_sec, msg);
 
-		memset(sta->current_ssid, 0, SSID_LEN);
+		if(mgmt_st == MGMT_DISASSOC && sta->flags & NFL_STA) {
+			/* Clear SSID for leavning/inactive station */
+			memset(sta->current_ssid, 0, SSID_LEN);
+		}
 	}
 	else if(mgmt_st == MGMT_PROBE_REQ && strlen(ssid)) {
 		sprintf(msg, FMT_PREFIX "%s probing for SSID: %s",
