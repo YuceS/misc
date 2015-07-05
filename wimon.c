@@ -1747,7 +1747,8 @@ int main(int c, char **v) {
 	signal(SIGUSR1, sighandler);
 
 	fprintf(stderr, "[main] Parsing tcpdump output for Wi-Fi frames...\n");
-	now = prev_report = prev_update = time(NULL);
+	now = time(NULL);
+	prev_report = prev_update = 0;
 	while(!do_exit && fgets(buf, sizeof(buf), fd) != NULL) {
 		char *temp;
 
@@ -1770,7 +1771,9 @@ int main(int c, char **v) {
 		}
 
 		now = tv.tv_sec;
-		if(now - (prev_update + PERIODIC_UPDATE) > 0) {
+		if(prev_update == 0)
+			prev_update = now;
+		else if(now - (prev_update + PERIODIC_UPDATE) > 0) {
 			sqlite3_exec(db, "PRAGMA synchronous=0", NULL, NULL, NULL);
 			if(update(now) < 0) {
 				fprintf(stderr, "[main] update() failed\n");
@@ -1780,7 +1783,9 @@ int main(int c, char **v) {
 			sqlite3_exec(db, "PRAGMA synchronous=1", NULL, NULL, NULL);
 		}
 
-		if(now - (prev_report + PERIODIC_REPORT) > 0) {
+		if(prev_report == 0)
+			prev_report = now;
+		else if(now - (prev_report + PERIODIC_REPORT) > 0) {
 			do_report();
 			prev_report = now;
 		}
@@ -1791,7 +1796,7 @@ int main(int c, char **v) {
 	/* Do a final update and save everything */
 	sqlite3_exec(db, "PRAGMA synchronous=0", NULL, NULL, NULL);
 	sqlite3_exec(db, "PRAGMA journal_mode=OFF", NULL, NULL, NULL);
-	update(time(NULL));
+	update(now);
 	unregister_db_stmts();
 	sqlite3_close(db);
 
