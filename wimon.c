@@ -448,7 +448,7 @@ static int archive_data(time_t now) {
 		fprintf(stderr, "[archive_data] Archiving samples"
 			" between %s - %s\n", date, date_end);
 
-		/* Create archive tables if necessary */
+		/* Create archive table if necessary */
 		sprintf(q, "CREATE TABLE IF NOT EXISTS"
 			" samples_%04d%02d%02d%02d (node_id INTEGER,"
 			" created UNSIGNED integer, freq INTEGER, dbm INTEGER,"
@@ -460,33 +460,6 @@ static int archive_data(time_t now) {
 				sqlite3_errmsg(db), q);
 			return -1;
 		}
-
-		sprintf(q, "CREATE INDEX IF NOT EXISTS"
-			" idx_samples_node_id_%04d%02d%02d%02d"
-			" ON samples_%04d%02d%02d%02d (node_id ASC)",
-			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-			tm.tm_hour,
-			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-			tm.tm_hour);
-		if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
-			fprintf(stderr, "SQLite: %s\nSQL: %s\n",
-				sqlite3_errmsg(db), q);
-			return -1;
-		}
-
-		sprintf(q, "CREATE INDEX IF NOT EXISTS"
-			" idx_samples_created_%04d%02d%02d%02d"
-			" ON samples_%04d%02d%02d%02d (created DESC)",
-			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-			tm.tm_hour,
-			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-			tm.tm_hour);
-		if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
-			fprintf(stderr, "SQLite: %s\nSQL: %s\n",
-				sqlite3_errmsg(db), q);
-			return -1;
-		}
-
 
 		sprintf(q, "INSERT INTO samples_%04d%02d%02d%02d"
 			" SELECT * FROM samples WHERE created BETWEEN ? AND ?",
@@ -515,6 +488,33 @@ static int archive_data(time_t now) {
 
 		sqlite3_finalize(stmt);
 		n += sqlite3_changes(db);
+
+		/* Add indices to archive table if necessary */
+		sprintf(q, "CREATE INDEX IF NOT EXISTS"
+			" idx_samples_node_id_%04d%02d%02d%02d"
+			" ON samples_%04d%02d%02d%02d (node_id ASC)",
+			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+			tm.tm_hour,
+			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+			tm.tm_hour);
+		if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
+			fprintf(stderr, "SQLite: %s\nSQL: %s\n",
+				sqlite3_errmsg(db), q);
+			return -1;
+		}
+
+		sprintf(q, "CREATE INDEX IF NOT EXISTS"
+			" idx_samples_created_%04d%02d%02d%02d"
+			" ON samples_%04d%02d%02d%02d (created DESC)",
+			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+			tm.tm_hour,
+			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+			tm.tm_hour);
+		if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
+			fprintf(stderr, "SQLite: %s\nSQL: %s\n",
+				sqlite3_errmsg(db), q);
+			return -1;
+		}
 
 		sprintf(q, "DELETE FROM samples WHERE created BETWEEN ? AND ?");
 		rc = sqlite3_prepare_v2(db, q, -1, &stmt, NULL);
@@ -588,7 +588,7 @@ static int archive_data(time_t now) {
 		fprintf(stderr, "[archive_data] Archiving logs"
 			" between %s - %s\n", date, date_end);
 
-		/* Create archive tables if necessary */
+		/* Create archive table if necessary */
 		sprintf(q, "CREATE TABLE IF NOT EXISTS log_%04d%02d%02d%02d"
 			" (node_id INTEGER, created UNSIGNED INTEGER,"
 			" log TEXT)",
@@ -599,29 +599,6 @@ static int archive_data(time_t now) {
 				sqlite3_errmsg(db), q);
 			return -1;
 		}
-
-		sprintf(q, "CREATE INDEX IF NOT EXISTS"
-			" idx_log_node_id_%04d%02d%02d%02d"
-			" ON log_%04d%02d%02d%02d (node_id ASC)",
-			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
-			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour);
-		if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
-			fprintf(stderr, "SQLite: %s\nSQL: %s\n",
-				sqlite3_errmsg(db), q);
-			return -1;
-		}
-
-		sprintf(q, "CREATE INDEX IF NOT EXISTS"
-			" idx_log_created_%04d%02d%02d%02d"
-			" ON log_%04d%02d%02d%02d (created DESC)",
-			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
-			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour);
-		if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
-			fprintf(stderr, "SQLite: %s\nSQL: %s\n",
-				sqlite3_errmsg(db), q);
-			return -1;
-		}
-
 
 		sprintf(q, "INSERT INTO log_%04d%02d%02d%02d"
 			" SELECT * FROM log WHERE created BETWEEN ? AND ?",
@@ -649,6 +626,29 @@ static int archive_data(time_t now) {
 
 		sqlite3_finalize(stmt);
 		n += sqlite3_changes(db);
+
+		/* Add indices to archive table if necessary */
+		sprintf(q, "CREATE INDEX IF NOT EXISTS"
+			" idx_log_node_id_%04d%02d%02d%02d"
+			" ON log_%04d%02d%02d%02d (node_id ASC)",
+			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
+			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour);
+		if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
+			fprintf(stderr, "SQLite: %s\nSQL: %s\n",
+				sqlite3_errmsg(db), q);
+			return -1;
+		}
+
+		sprintf(q, "CREATE INDEX IF NOT EXISTS"
+			" idx_log_created_%04d%02d%02d%02d"
+			" ON log_%04d%02d%02d%02d (created DESC)",
+			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
+			tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour);
+		if(sqlite3_exec(db, q, NULL, NULL, NULL) != SQLITE_OK) {
+			fprintf(stderr, "SQLite: %s\nSQL: %s\n",
+				sqlite3_errmsg(db), q);
+			return -1;
+		}
 
 		sprintf(q, "DELETE FROM log WHERE created BETWEEN ? AND ?");
 		rc = sqlite3_prepare_v2(db, q, -1, &stmt, NULL);
